@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .db import ReceiptRepository
 from .documents import DocumentRenderer
-from .models import OcrLine, ParsedReceipt
-from .ocr import OcrEngine
-from .parser import SerbianReceiptParser
+from .models import ParsedReceipt
+from .qr import QrCodeReader
 from .translation import Translator
+from .verification import ReceiptVerificationClient, VerificationError
 
 
 @dataclass(frozen=True)
@@ -19,59 +20,64 @@ class ProcessOutcome:
 
 
 class ReceiptProcessor:
+    """Process receipts through QR verification; OCR is intentionally unused."""
+
     def __init__(
         self,
         repository: ReceiptRepository,
         renderer: DocumentRenderer,
-        ocr: OcrEngine,
-        parser: SerbianReceiptParser,
+        qr_reader: QrCodeReader,
+        verifier: ReceiptVerificationClient,
         translator: Translator,
-        confidence_threshold: float,
+        confidence_threshold: float = 0.90,
     ) -> None:
         self.repository = repository
         self.renderer = renderer
-        self.ocr = ocr
-        self.parser = parser
+        self.qr_reader = qr_reader
+        self.verifier = verifier
         self.translator = translator
         self.confidence_threshold = confidence_threshold
 
     def process(self, receipt_id: int) -> ProcessOutcome:
         self.repository.set_processing(receipt_id)
-        all_lines: list[OcrLine] = []
-        languages: list[str] = []
         try:
+            payloads: list[str] = []
+            page_rows: list[tuple[int, dict[str, object]]] = []
+            qr_codes: list[dict[str, object]] = []
             for stored_file in self.repository.list_receipt_files(receipt_id):
-                pages = self.renderer.pages(stored_file.path, receipt_id)
-                page_rows = []
+                pages = self.renderer.qr_pages(stored_file.path, receipt_id)
                 for page in pages:
-                    if page.embedded_text:
-                        lines = [
-                            OcrLine(text=line.strip(), confidence=1.0, page_number=page.page_number)
-                            for line in page.embedded_text.splitlines()
-                            if line.strip()
-                        ]
-                        language = "embedded_pdf_text"
-                    else:
-                        assert page.image_path is not None
-                        lines, language = self.ocr.extract(page.image_path, page.page_number)
-                    all_lines.extend(lines)
-                    languages.append(language)
-                    page_rows.append({
+                    assert page.image_path is not None
+                    page_payloads = self.qr_reader.read(page.image_path)
+                    page_rows.append((stored_file.id, {
                         "page_number": page.page_number,
-                        "rendered_path": str(page.image_path) if page.image_path else None,
-                        "embedded_text": page.embedded_text,
-                        "ocr_text": "\n".join(line.text for line in lines),
-                        "ocr_confidence": (
-                            sum(line.confidence for line in lines) / len(lines) if lines else 0.0
-                        ),
-                    })
-                self.repository.save_pages(stored_file.id, page_rows)
+                        "rendered_path": str(page.image_path),
+                        "qr_payloads": page_payloads,
+                    }))
+                    for payload in page_payloads:
+                        if payload not in payloads:
+                            payloads.append(payload)
+                        qr_codes.append({
+                            "receipt_file_id": stored_file.id,
+                            "page_number": page.page_number,
+                            "payload": payload,
+                            "url": payload if payload.lower().startswith("https://") else None,
+                        })
+                self.repository.save_pages(stored_file.id, [row for file_id, row in page_rows if file_id == stored_file.id])
+            if not payloads:
+                raise VerificationError("No QR code found in the receipt")
+            if len(payloads) > 1:
+                raise VerificationError("More than one different QR payload was found in this receipt")
 
-            parsed = self.parser.parse(all_lines, self._dominant_language(languages))
+            parsed, document = self.verifier.fetch(payloads[0])
+            parsed.qr_payload = payloads[0]
+            parsed.qr_url = document.url or parsed.qr_url
+            parsed.verification_response = document.content
+            parsed.verification_content_type = document.content_type
+            parsed.verification_http_status = document.status_code
             self._translate(parsed)
-            needs_review = self.repository.save_processed_receipt(
-                receipt_id, parsed, self.confidence_threshold
-            )
+            self.repository.save_qr_codes(receipt_id, qr_codes)
+            needs_review = self.repository.save_processed_receipt(receipt_id, parsed, self.confidence_threshold)
             return ProcessOutcome(receipt_id, needs_review, self.repository.receipt_summary(receipt_id))
         except Exception as error:
             self.repository.fail_receipt(receipt_id, str(error))
@@ -86,13 +92,18 @@ class ReceiptProcessor:
         return self.repository.apply_correction(int(task["id"]), value, english_value)
 
     def add_manual_item(self, receipt_id: int, name_source: str, quantity: str, line_total: str) -> None:
+        # Kept for conversational correction compatibility.  QR receipts should
+        # normally never need this command; a failed QR is deliberately FAILED.
         from decimal import Decimal
 
         english = self.translator.translate(name_source)
         self.repository.save_translation_override(name_source, english)
         self.repository.add_item_from_manual_entry(
-            receipt_id, name_source, english,
-            Decimal(quantity.replace(",", ".")), Decimal(line_total.replace(",", ".")),
+            receipt_id,
+            name_source,
+            english,
+            Decimal(quantity.replace(",", ".")),
+            Decimal(line_total.replace(",", ".")),
         )
 
     def _translate(self, parsed: ParsedReceipt) -> None:
@@ -102,7 +113,3 @@ class ReceiptProcessor:
             item.name_en = self.translator.translate(item.name_source)
             if item.producer_source:
                 item.producer_en = self.translator.translate(item.producer_source)
-
-    @staticmethod
-    def _dominant_language(languages: list[str]) -> str:
-        return max(set(languages), key=languages.count) if languages else "unknown"

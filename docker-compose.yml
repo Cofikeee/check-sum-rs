@@ -1,8 +1,30 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-receipts}
+      POSTGRES_USER: ${POSTGRES_USER:-receiptbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-receiptbot} -d ${POSTGRES_DB:-receipts}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   receipt-bot:
     build: .
     env_file:
       - ${RECEIPT_BOT_ENV_FILE:-.env}
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+
+volumes:
+  postgres_data:

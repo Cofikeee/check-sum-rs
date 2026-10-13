@@ -20,11 +20,11 @@ from telegram.ext import (
 from .config import Settings
 from .db import ReceiptRepository
 from .documents import DocumentRenderer
-from .ocr import PaddleOcrEngine
-from .parser import SerbianReceiptParser
 from .processor import ProcessOutcome, ReceiptProcessor
+from .qr import QrCodeReader
 from .storage import LocalStorage
 from .translation import CachedTranslator, LocalMarianTranslator
+from .verification import ReceiptVerificationClient
 
 
 CompletionHandler = Callable[[int, ProcessOutcome | None, Exception | None], Awaitable[None]]
@@ -69,7 +69,7 @@ class TelegramReceiptBot:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.settings.ensure_directories()
-        self.repository = ReceiptRepository(settings.database_path)
+        self.repository = ReceiptRepository(settings.database_url)
         self.repository.initialise()
         self.storage = LocalStorage(settings.data_dir)
         translator = CachedTranslator(
@@ -78,8 +78,12 @@ class TelegramReceiptBot:
         self.processor = ReceiptProcessor(
             self.repository,
             DocumentRenderer(self.storage),
-            PaddleOcrEngine(),
-            SerbianReceiptParser(),
+            QrCodeReader(),
+            ReceiptVerificationClient(
+                settings.qr_allowed_hosts,
+                settings.qr_timeout_seconds,
+                settings.qr_max_response_bytes,
+            ),
             translator,
             settings.confidence_threshold,
         )
@@ -132,9 +136,9 @@ class TelegramReceiptBot:
             return
         assert update.effective_message
         await update.effective_message.reply_text(
-            "Send a receipt photo or PDF to import it. Each upload is one receipt by default.\n\n"
+            "Send a receipt photo or PDF to import it. I scan its QR code and load the verified receipt data.\n\n"
             "Use /batch before sending several photos of one long receipt, then /done.\n"
-            "Use /status to check processing. I only message again when review is needed."
+            "Use /status to check processing. A missing QR or unavailable verification page is marked FAILED."
         )
 
     async def batch(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -298,7 +302,7 @@ class TelegramReceiptBot:
         chat_id = self.repository.owner_chat_id(receipt_id)
         await self.application.bot.send_message(
             chat_id=chat_id,
-            text=f"Receipt #{receipt_id} could not be processed: {error}. Send a clearer image or check /status.",
+            text=f"Receipt #{receipt_id} failed: {error}. Check that the QR code is visible and the verification link is reachable.",
         )
 
     async def _notify_next_review(self, chat_id: int) -> None:

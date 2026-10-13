@@ -23,6 +23,21 @@ class DocumentRenderer:
             return self._pdf_pages(source, receipt_id)
         return [SourcePage(page_number=1, image_path=self._normalise_image(source, receipt_id, 1))]
 
+    def qr_pages(self, source: Path, receipt_id: int) -> list[SourcePage]:
+        """Render every page because QR symbols may be present beside PDF text."""
+        if source.suffix.lower() != ".pdf":
+            return [SourcePage(page_number=1, image_path=self._normalise_image(source, receipt_id, 1))]
+        try:
+            reader = PdfReader(str(source))
+        except Exception as error:
+            raise ValueError(f"The PDF cannot be read: {error}") from error
+        rendered = self._render_pdf(source, receipt_id)
+        return [
+            SourcePage(page_number=index, image_path=rendered[index])
+            for index in range(1, len(reader.pages) + 1)
+            if index in rendered
+        ]
+
     def _normalise_image(self, source: Path, receipt_id: int, page_number: int) -> Path:
         target = self.storage.page_path(receipt_id, page_number)
         with Image.open(source) as image:

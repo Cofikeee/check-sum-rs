@@ -59,19 +59,10 @@ def test_batch_attaches_multiple_files_to_one_receipt(tmp_path: Path) -> None:
     assert repository.active_batch(99) is None
 
 
-def test_missing_merchant_creates_conversational_review_task(tmp_path: Path) -> None:
+def test_failed_receipt_is_recorded_for_qr_errors(tmp_path: Path) -> None:
     repository = ReceiptRepository(tmp_path / "receipts.sqlite3")
     repository.initialise()
     receipt_id = repository.queue_single_receipt(5, create_file(repository, tmp_path, "review.jpg"))
     assert receipt_id is not None
-    parsed = complete_receipt()
-    parsed.merchant_name_source = None
-    parsed.merchant_name_en = None
-    assert repository.save_processed_receipt(receipt_id, parsed, 0.90) is True
-    task = repository.next_review_task(5)
-    assert task is not None
-    assert task["field_key"] == "receipt.merchant"
-    repository.mark_awaiting_correction(int(task["id"]))
-    repository.apply_correction(int(task["id"]), "IDEA", "IDEA")
-    assert repository.status_counts(5) == {"COMPLETED": 1}
-    assert "IDEA" in repository.receipt_summary(receipt_id)
+    repository.fail_receipt(receipt_id, "No QR code found")
+    assert repository.status_counts(5) == {"FAILED": 1}

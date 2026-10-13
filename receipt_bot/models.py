@@ -44,6 +44,14 @@ class ParsedReceipt:
     ocr_language: str = "unknown"
     confidence: float = 0.0
     validation_warnings: list[str] = field(default_factory=list)
+    # QR/verification provenance.  The receipt is now sourced from the
+    # verifier response rather than OCR text.
+    qr_url: str | None = None
+    qr_payload: str | None = None
+    verification_response: str = ""
+    verification_content_type: str | None = None
+    verification_http_status: int | None = None
+    source_method: str = "qr_verification"
 
 
 @dataclass(frozen=True)
