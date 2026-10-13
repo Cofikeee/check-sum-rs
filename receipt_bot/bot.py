@@ -304,8 +304,8 @@ class TelegramReceiptBot:
             chat_id=chat_id,
             text=(
                 f"Receipt #{receipt_id} failed: {error}.\n\n"
-                "If this is a phone photo, resend the original image as a Telegram "
-                "file/document (not as a compressed photo), with the complete QR visible."
+                "For QR errors, send a sharp close-up with the complete QR filling "
+                "most of the frame, preferably as a Telegram file/document."
             ),
         )
 

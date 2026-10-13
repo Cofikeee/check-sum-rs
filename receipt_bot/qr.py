@@ -21,14 +21,22 @@ class QrCodeReader:
             raise RuntimeError("The zxing-cpp QR decoder is not installed") from error
 
         payloads: list[str] = []
+        detected = False
         with Image.open(image_path) as source:
             image = ImageOps.exif_transpose(source).convert("RGB")
             for variant in self._variants(image):
                 try:
-                    barcodes = zxingcpp.read_barcodes(np.asarray(variant))
+                    barcodes = zxingcpp.read_barcodes(np.asarray(variant), return_errors=True)
                 except Exception:
                     continue
+                if barcodes:
+                    # ZXing may return a symbol with an empty payload and a
+                    # checksum error. It is still important to distinguish
+                    # that from a page with no QR at all.
+                    detected = True
                 for barcode in barcodes:
+                    if getattr(barcode, "error", None) is not None:
+                        continue
                     value = str(getattr(barcode, "text", "") or "").strip()
                     if value and value not in payloads:
                         payloads.append(value)
@@ -38,13 +46,16 @@ class QrCodeReader:
             # Phone photos frequently contain a large, skewed QR at the bottom
             # of a receipt. OpenCV can find its four corners even when ZXing's
             # full-page detector cannot; rectify that quadrilateral and retry.
-            payloads, detected = self._opencv_fallback(image, zxingcpp, np)
+            fallback_payloads, fallback_detected = self._opencv_fallback(image, zxingcpp, np)
+            payloads.extend(value for value in fallback_payloads if value not in payloads)
+            detected = detected or fallback_detected
         if payloads:
             return payloads
         if detected:
             raise QrDecodeError(
-                f"QR code detected but unreadable in {image_path.name}; "
-                "send the original image as a Telegram file/document"
+                f"QR code detected but unreadable in {image_path.name} "
+                "(checksum/blur); send a sharp close-up with the QR filling most "
+                "of the frame, preferably as a Telegram file/document"
             )
         raise QrDecodeError(f"No readable QR code found in {image_path.name}")
 
