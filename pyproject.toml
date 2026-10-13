@@ -29,6 +29,8 @@ local-inference = ["torch==2.5.1"]
 
 [project.scripts]
 receipt-bot = "receipt_bot.bot:main"
+receipt-bot-import-slipapp = "receipt_bot.import_slipapp:main"
+receipt-bot-rebuild-silver = "receipt_bot.rebuild_silver:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -44,6 +44,18 @@ CREATE TABLE IF NOT EXISTS receipts (
     verification_content_type TEXT,
     verification_http_status INTEGER,
     source_method TEXT NOT NULL DEFAULT 'qr_verification',
+    merchant_tax_id TEXT,
+    merchant_location_name TEXT,
+    merchant_administrative_unit TEXT,
+    merchant_city TEXT,
+    merchant_address TEXT,
+    merchant_cashier TEXT,
+    buyer TEXT,
+    fiscal_esir TEXT,
+    receipt_type TEXT,
+    transaction_type TEXT,
+    payment_details TEXT NOT NULL DEFAULT '[]',
+    tax_details TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -96,6 +108,28 @@ CREATE TABLE IF NOT EXISTS receipt_qr_codes (
 );
 CREATE INDEX IF NOT EXISTS idx_receipt_qr_receipt ON receipt_qr_codes(receipt_id);
 
+-- A SlipApp backup contains many receipts in one SQLite file.  Keep the
+-- backup as one immutable import source and link each source row to the
+-- normalized receipt it produced instead of pretending the whole database is
+-- a single receipt file.
+CREATE TABLE IF NOT EXISTS receipt_imports (
+    id INTEGER PRIMARY KEY,
+    source_app TEXT NOT NULL,
+    stored_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL UNIQUE,
+    original_filename TEXT,
+    imported_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS receipt_import_receipts (
+    import_id INTEGER NOT NULL REFERENCES receipt_imports(id) ON DELETE CASCADE,
+    receipt_id INTEGER NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+    source_record_id TEXT NOT NULL,
+    PRIMARY KEY (import_id, receipt_id),
+    UNIQUE (import_id, source_record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_receipt_import_receipts_receipt ON receipt_import_receipts(receipt_id);
+
 CREATE TABLE IF NOT EXISTS merchants (
     id INTEGER PRIMARY KEY,
     name_source TEXT NOT NULL,
@@ -118,6 +152,8 @@ CREATE TABLE IF NOT EXISTS receipt_items (
     unit_price TEXT,
     line_total TEXT,
     confidence REAL NOT NULL,
+    tax_symbol TEXT,
+    tax_name TEXT,
     UNIQUE(receipt_id, position)
 );
 CREATE INDEX IF NOT EXISTS idx_receipt_items_receipt ON receipt_items(receipt_id);
@@ -225,6 +261,26 @@ class ReceiptRepository:
             with self._connection() as connection:
                 with connection.cursor() as cursor:
                     cursor.execute(schema)
+                    # The production database may have been initialized by an
+                    # older bot image.  Keep this migration additive and
+                    # restart-safe.
+                    for statement in (
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS merchant_tax_id TEXT",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS merchant_location_name TEXT",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS merchant_administrative_unit TEXT",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS merchant_city TEXT",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS merchant_address TEXT",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS merchant_cashier TEXT",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS buyer TEXT",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS fiscal_esir TEXT",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS receipt_type TEXT",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS transaction_type TEXT",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS payment_details TEXT NOT NULL DEFAULT '[]'",
+                        "ALTER TABLE receipts ADD COLUMN IF NOT EXISTS tax_details TEXT NOT NULL DEFAULT '[]'",
+                        "ALTER TABLE receipt_items ADD COLUMN IF NOT EXISTS tax_symbol TEXT",
+                        "ALTER TABLE receipt_items ADD COLUMN IF NOT EXISTS tax_name TEXT",
+                    ):
+                        cursor.execute(statement)
             return
         assert self.database_path is not None
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,6 +306,98 @@ class ReceiptRepository:
             row = self._execute(connection, "SELECT * FROM receipt_files WHERE id = ?", (file_id,)).fetchone()
             assert row is not None
             return self._stored_file(row), True
+
+    def register_import(
+        self, source_app: str, path: Path, sha256: str, original_filename: str | None
+    ) -> tuple[int, bool]:
+        """Register an immutable multi-receipt import source.
+
+        Returns ``(id, inserted)``.  A repeated upload of the same backup can
+        therefore resume safely without creating another set of receipts.
+        """
+        with self._connection() as connection:
+            existing = self._execute(
+                connection, "SELECT id FROM receipt_imports WHERE sha256 = ?", (sha256,)
+            ).fetchone()
+            if existing is not None:
+                return int(existing["id"]), False
+            import_id = self._insert_id(
+                connection,
+                """INSERT INTO receipt_imports
+                   (source_app, stored_path, sha256, original_filename, imported_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (source_app, str(path), sha256, original_filename, _now()),
+            )
+            return import_id, True
+
+    def import_parsed_receipt(
+        self,
+        import_id: int,
+        source_record_id: str,
+        owner_chat_id: int,
+        parsed: ParsedReceipt,
+        threshold: float = 0.90,
+    ) -> tuple[int, bool, bool]:
+        """Upsert one parsed receipt and link it to a backup source row.
+
+        The fiscal verification URL and fiscal receipt number are stable
+        identifiers.  They make imports idempotent even when a receipt was
+        previously entered through Telegram or another backup.
+        """
+        with self._connection() as connection:
+            linked = self._execute(
+                connection,
+                """SELECT receipt_id FROM receipt_import_receipts
+                   WHERE import_id = ? AND source_record_id = ?""",
+                (import_id, source_record_id),
+            ).fetchone()
+            if linked is not None:
+                return int(linked["receipt_id"]), False, False
+
+            existing = None
+            if parsed.qr_url or parsed.fiscal_receipt_number:
+                if parsed.qr_url and parsed.fiscal_receipt_number:
+                    existing = self._execute(
+                        connection,
+                        """SELECT id FROM receipts
+                           WHERE qr_url = ? OR fiscal_receipt_number = ?
+                           ORDER BY id LIMIT 1""",
+                        (parsed.qr_url, parsed.fiscal_receipt_number),
+                    ).fetchone()
+                elif parsed.qr_url:
+                    existing = self._execute(
+                        connection, "SELECT id FROM receipts WHERE qr_url = ? ORDER BY id LIMIT 1", (parsed.qr_url,)
+                    ).fetchone()
+                else:
+                    existing = self._execute(
+                        connection,
+                        "SELECT id FROM receipts WHERE fiscal_receipt_number = ? ORDER BY id LIMIT 1",
+                        (parsed.fiscal_receipt_number,),
+                    ).fetchone()
+
+            created = existing is None
+            if created:
+                timestamp = _now()
+                receipt_id = self._insert_id(
+                    connection,
+                    """INSERT INTO receipts
+                       (owner_chat_id, status, created_at, updated_at)
+                       VALUES (?, 'PROCESSING', ?, ?)""",
+                    (owner_chat_id, timestamp, timestamp),
+                )
+            else:
+                receipt_id = int(existing["id"])
+
+            self._execute(
+                connection,
+                """INSERT INTO receipt_import_receipts (import_id, receipt_id, source_record_id)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT DO NOTHING""",
+                (import_id, receipt_id, source_record_id),
+            )
+
+        needs_review = self.save_processed_receipt(receipt_id, parsed, threshold)
+        return receipt_id, created, needs_review
 
     @staticmethod
     def _stored_file(row: Any) -> StoredFile:
@@ -420,6 +568,9 @@ class ReceiptRepository:
                        gross_total = ?, tax_total = ?, payment_method = ?, fiscal_receipt_number = ?, source_text = ?,
                        ocr_language = ?, confidence = ?, validation_warnings = ?, qr_url = ?, qr_payload = ?,
                        verification_response = ?, verification_content_type = ?, verification_http_status = ?, source_method = ?,
+                       merchant_tax_id = ?, merchant_location_name = ?, merchant_administrative_unit = ?, merchant_city = ?,
+                       merchant_address = ?, merchant_cashier = ?, buyer = ?, fiscal_esir = ?, receipt_type = ?,
+                       transaction_type = ?, payment_details = ?, tax_details = ?,
                        status = 'COMPLETED', updated_at = ? WHERE id = ?""",
                 (
                     parsed.merchant_name_source, parsed.merchant_name_en,
@@ -428,7 +579,12 @@ class ReceiptRepository:
                     parsed.payment_method, parsed.fiscal_receipt_number, parsed.raw_text, parsed.ocr_language,
                     parsed.confidence, json.dumps(parsed.validation_warnings, ensure_ascii=False), parsed.qr_url,
                     parsed.qr_payload, parsed.verification_response, parsed.verification_content_type,
-                    parsed.verification_http_status, parsed.source_method, timestamp, receipt_id,
+                    parsed.verification_http_status, parsed.source_method,
+                    parsed.merchant_tax_id, parsed.merchant_location_name, parsed.merchant_administrative_unit,
+                    parsed.merchant_city, parsed.merchant_address, parsed.merchant_cashier, parsed.buyer,
+                    parsed.fiscal_esir, parsed.receipt_type, parsed.transaction_type,
+                    json.dumps(parsed.payment_details, ensure_ascii=False),
+                    json.dumps(parsed.tax_details, ensure_ascii=False), timestamp, receipt_id,
                 ),
             )
             item_ids: list[int] = []
@@ -436,11 +592,13 @@ class ReceiptRepository:
                 item_ids.append(self._insert_id(
                     connection,
                     """INSERT INTO receipt_items
-                       (receipt_id, position, name_source, name_en, producer_source, producer_en, quantity, unit, unit_price, line_total, confidence)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (receipt_id, position, name_source, name_en, producer_source, producer_en, quantity, unit,
+                        unit_price, line_total, confidence, tax_symbol, tax_name)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         receipt_id, item.position, item.name_source, item.name_en, item.producer_source, item.producer_en,
-                        self._decimal(item.quantity), item.unit, self._decimal(item.unit_price), self._decimal(item.line_total), item.confidence,
+                        self._decimal(item.quantity), item.unit, self._decimal(item.unit_price), self._decimal(item.line_total),
+                        item.confidence, item.tax_symbol, item.tax_name,
                     ),
                 ))
             tasks: list[tuple[str, str, str | None]] = []

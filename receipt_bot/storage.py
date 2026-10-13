@@ -10,8 +10,10 @@ from uuid import uuid4
 class LocalStorage:
     def __init__(self, data_dir: Path) -> None:
         self.files_dir = data_dir / "files"
+        self.imports_dir = data_dir / "imports"
         self.pages_dir = data_dir / "pages"
         self.files_dir.mkdir(parents=True, exist_ok=True)
+        self.imports_dir.mkdir(parents=True, exist_ok=True)
         self.pages_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -23,9 +25,15 @@ class LocalStorage:
         return digest.hexdigest()
 
     def persist_download(self, temporary_path: Path, original_name: str | None) -> tuple[Path, str, str]:
+        return self._persist_to(temporary_path, original_name, self.files_dir)
+
+    def persist_import(self, temporary_path: Path, original_name: str | None) -> tuple[Path, str, str]:
+        return self._persist_to(temporary_path, original_name, self.imports_dir)
+
+    def _persist_to(self, temporary_path: Path, original_name: str | None, target_dir: Path) -> tuple[Path, str, str]:
         digest = self.sha256(temporary_path)
         suffix = Path(original_name or temporary_path.name).suffix.lower()
-        target = self.files_dir / f"{digest}{suffix}"
+        target = target_dir / f"{digest}{suffix}"
         if not target.exists():
             shutil.move(str(temporary_path), target)
         else:

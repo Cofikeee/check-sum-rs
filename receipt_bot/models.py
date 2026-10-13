@@ -27,6 +27,8 @@ class ReceiptItemDraft:
     confidence: float = 0.0
     name_en: str | None = None
     producer_en: str | None = None
+    tax_symbol: str | None = None
+    tax_name: str | None = None
 
 
 @dataclass
@@ -52,6 +54,19 @@ class ParsedReceipt:
     verification_content_type: str | None = None
     verification_http_status: int | None = None
     source_method: str = "qr_verification"
+    # Structured fields present in Serbian fiscal verification responses.
+    merchant_tax_id: str | None = None
+    merchant_location_name: str | None = None
+    merchant_administrative_unit: str | None = None
+    merchant_city: str | None = None
+    merchant_address: str | None = None
+    merchant_cashier: str | None = None
+    buyer: str | None = None
+    fiscal_esir: str | None = None
+    receipt_type: str | None = None
+    transaction_type: str | None = None
+    payment_details: list[dict[str, str | None]] = field(default_factory=list)
+    tax_details: list[dict[str, str | None]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
