@@ -302,7 +302,11 @@ class TelegramReceiptBot:
         chat_id = self.repository.owner_chat_id(receipt_id)
         await self.application.bot.send_message(
             chat_id=chat_id,
-            text=f"Receipt #{receipt_id} failed: {error}. Check that the QR code is visible and the verification link is reachable.",
+            text=(
+                f"Receipt #{receipt_id} failed: {error}.\n\n"
+                "If this is a phone photo, resend the original image as a Telegram "
+                "file/document (not as a compressed photo), with the complete QR visible."
+            ),
         )
 
     async def _notify_next_review(self, chat_id: int) -> None:
