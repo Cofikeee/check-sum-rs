@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "serbian-receipt-bot"
+version = "0.1.0"
+description = "Local Telegram receipt transcription for Serbian receipts"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "python-telegram-bot>=21.7,<22",
+  "Pillow>=10.4",
+  "pypdf>=5.0",
+  "paddleocr>=3.0",
+  "paddlepaddle>=3.0",
+  "transformers>=4.46,<5",
+  "sentencepiece>=0.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24"]
+# The Docker image deliberately installs the CPU-only Torch wheel from PyTorch's
+# CPU index. Keeping it out of the generic dependency set avoids accidental
+# multi-gigabyte CUDA downloads on a CPU-only home server.
+local-inference = ["torch==2.5.1"]
+
+[project.scripts]
+receipt-bot = "receipt_bot.bot:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.setuptools.packages.find]
+include = ["receipt_bot*"]

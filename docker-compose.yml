@@ -1,0 +1,8 @@
+services:
+  receipt-bot:
+    build: .
+    env_file:
+      - ${RECEIPT_BOT_ENV_FILE:-.env}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
