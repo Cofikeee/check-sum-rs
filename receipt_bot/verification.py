@@ -365,6 +365,17 @@ class VerificationParser:
 
     @staticmethod
     def _payment(value: Any) -> str | None:
+        if isinstance(value, list):
+            values = []
+            for item in value:
+                if isinstance(item, Mapping):
+                    candidate = VerificationParser._first(
+                        {VerificationParser._key(key): item_value for key, item_value in item.items()},
+                        "paymenttype", "type", "name",
+                    )
+                    if candidate is not None:
+                        values.append(str(candidate))
+            value = ", ".join(values)
         text = VerificationParser._text(value)
         if not text:
             return None
