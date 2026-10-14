@@ -55,3 +55,10 @@ def test_bronze_source_tables_and_silver_derivation(tmp_path: Path) -> None:
     assert "bronze_slipapp_receipts" in tables
     assert "bronze_input_entries" in tables
     assert "silver_receipts" in tables
+    assert "meta_translation_overrides" in tables
+    assert "receipt_files" not in tables
+    with repository._connection() as connection:
+        product = connection.execute(
+            "SELECT merchant_name FROM silver_products WHERE name_source = 'Млеко/KOM/12345'"
+        ).fetchone()
+        assert product[0] == "ТЕСТ ПРОДАВНИЦА"

@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS silver_merchants (
 CREATE TABLE IF NOT EXISTS silver_products (
     id INTEGER PRIMARY KEY,
     merchant_id INTEGER REFERENCES silver_merchants(id) ON DELETE SET NULL,
+    merchant_name TEXT,
     name_source TEXT NOT NULL,
     name_en TEXT,
     name_normalized TEXT NOT NULL,
@@ -152,6 +153,8 @@ CREATE TABLE IF NOT EXISTS silver_receipt_items (
     silver_receipt_id INTEGER NOT NULL REFERENCES silver_receipts(id) ON DELETE CASCADE,
     bronze_slipapp_item_id INTEGER NOT NULL UNIQUE REFERENCES bronze_slipapp_items(id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
+    merchant_id INTEGER REFERENCES silver_merchants(id) ON DELETE SET NULL,
+    merchant_name TEXT,
     product_id INTEGER REFERENCES silver_products(id) ON DELETE SET NULL,
     product_name TEXT,
     quantity TEXT,
@@ -170,6 +173,7 @@ CREATE TABLE IF NOT EXISTS silver_input_entries (
     id INTEGER PRIMARY KEY,
     bronze_input_id INTEGER NOT NULL UNIQUE REFERENCES bronze_input_entries(id) ON DELETE CASCADE,
     merchant_id INTEGER REFERENCES silver_merchants(id) ON DELETE SET NULL,
+    product_id INTEGER REFERENCES silver_products(id) ON DELETE SET NULL,
     merchant_name TEXT,
     product_name TEXT,
     quantity TEXT,
@@ -181,21 +185,100 @@ CREATE TABLE IF NOT EXISTS silver_input_entries (
     created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS silver_category_overrides (
+CREATE TABLE IF NOT EXISTS meta_translation_overrides (
+    source_normalized TEXT PRIMARY KEY,
+    source_text TEXT NOT NULL,
+    english_text TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meta_category_overrides (
     name_normalized TEXT PRIMARY KEY,
     category_wide TEXT NOT NULL,
     category_narrow TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS meta_schema_versions (
+    component TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    applied_at TEXT NOT NULL
+);
 """
 
 
+# Logical table names stay readable in SQLite tests.  In PostgreSQL they are
+# placed in real bronze/silver/meta schemas so a DataGrip connection exposes
+# the data layers as separate namespaces.
+WAREHOUSE_TABLES = {
+    "bronze_slipapp_imports": "bronze.slipapp_imports",
+    "bronze_slipapp_receipts": "bronze.slipapp_receipts",
+    "bronze_slipapp_import_rows": "bronze.slipapp_import_rows",
+    "bronze_slipapp_items": "bronze.slipapp_items",
+    "bronze_input_entries": "bronze.input_entries",
+    "silver_merchants": "silver.merchants",
+    "silver_products": "silver.products",
+    "silver_receipts": "silver.slipapp_receipts",
+    "silver_receipt_items": "silver.slipapp_items",
+    "silver_input_entries": "silver.input_entries",
+    "meta_translation_overrides": "meta.translation_overrides",
+    "meta_category_overrides": "meta.category_overrides",
+    "meta_schema_versions": "meta.schema_versions",
+}
+
+LEGACY_PUBLIC_TABLES = (
+    "silver_category_overrides",
+    "silver_input_entries",
+    "silver_receipt_items",
+    "silver_receipts",
+    "silver_products",
+    "silver_merchants",
+    "bronze_input_entries",
+    "bronze_slipapp_items",
+    "bronze_slipapp_import_rows",
+    "bronze_slipapp_receipts",
+    "bronze_slipapp_imports",
+    "review_events",
+    "review_tasks",
+    "receipt_qr_codes",
+    "receipt_pages",
+    "receipt_files",
+    "receipt_items",
+    "translation_overrides",
+    "merchants",
+    "receipt_import_receipts",
+    "receipt_imports",
+    "batch_sessions",
+    "receipts",
+)
+
+
 class WarehouseRepository(ReceiptRepository):
-    """Bronze/silver repository layered on the existing connection adapter."""
+    """Repository for the explicit bronze/silver/meta warehouse model.
+
+    ``ReceiptRepository`` remains available for the old unit-test surface, but
+    the running bot uses this class and therefore never creates the obsolete
+    public ``receipts``/``receipt_files`` model.
+    """
+
+    def _warehouse_sql(self, query: str) -> str:
+        if not self.is_postgres:
+            return query
+        # Replace only standalone SQL identifiers.  This avoids changing index
+        # names such as ``idx_silver_receipts_merchant``.
+        for logical, physical in sorted(WAREHOUSE_TABLES.items(), key=lambda item: -len(item[0])):
+            query = re.sub(
+                rf"(?<![A-Za-z0-9_]){re.escape(logical)}(?![A-Za-z0-9_])",
+                physical,
+                query,
+            )
+        return query
+
+    def _execute(self, connection: Any, query: str, params: tuple[Any, ...] = ()) -> Any:
+        return super()._execute(connection, self._warehouse_sql(query), params)
 
     def initialise(self) -> None:
-        super().initialise()
-        schema = WAREHOUSE_SCHEMA
+        schema = self._warehouse_sql(WAREHOUSE_SCHEMA)
         if self.is_postgres:
             schema = re.sub(r"\bINTEGER PRIMARY KEY\b", "BIGSERIAL PRIMARY KEY", schema)
             schema = re.sub(r"\bINTEGER NOT NULL REFERENCES\b", "BIGINT NOT NULL REFERENCES", schema)
@@ -204,10 +287,27 @@ class WarehouseRepository(ReceiptRepository):
             schema = schema.replace("source_message_id BIGINT", "source_message_id BIGINT")
             with self._connection() as connection:
                 with connection.cursor() as cursor:
+                    cursor.execute("CREATE SCHEMA IF NOT EXISTS bronze")
+                    cursor.execute("CREATE SCHEMA IF NOT EXISTS silver")
+                    cursor.execute("CREATE SCHEMA IF NOT EXISTS meta")
+                    # The old public model is no longer used by the bot.  It
+                    # is safe to remove it during this intentional warehouse
+                    # reset; the user explicitly requested a clean Postgres
+                    # database for the new model.
+                    for table in LEGACY_PUBLIC_TABLES:
+                        cursor.execute(f"DROP TABLE IF EXISTS public.{table} CASCADE")
                     cursor.execute(schema)
         else:
             with self._connection() as connection:
                 connection.executescript(schema)
+        with self._connection() as connection:
+            self._execute(
+                connection,
+                """INSERT INTO meta_schema_versions (component, version, applied_at)
+                   VALUES (?, ?, ?) ON CONFLICT(component) DO UPDATE SET version = excluded.version,
+                   applied_at = excluded.applied_at""",
+                ("warehouse", 2, _now()),
+            )
 
     def register_bronze_slipapp_import(
         self, path: Path, sha256: str, original_filename: str | None
@@ -337,8 +437,29 @@ class WarehouseRepository(ReceiptRepository):
             (name_source, name_en, normalized, _now()),
         )
 
+    def get_translation_override(self, source_text: str) -> str | None:
+        with self._connection() as connection:
+            row = self._execute(
+                connection,
+                "SELECT english_text FROM meta_translation_overrides WHERE source_normalized = ?",
+                (_norm(source_text),),
+            ).fetchone()
+            return str(row["english_text"]) if row else None
+
+    def save_translation_override(self, source_text: str, english_text: str) -> None:
+        with self._connection() as connection:
+            self._execute(
+                connection,
+                """INSERT INTO meta_translation_overrides
+                   (source_normalized, source_text, english_text, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(source_normalized) DO UPDATE SET source_text = excluded.source_text,
+                   english_text = excluded.english_text, updated_at = excluded.updated_at""",
+                (_norm(source_text), source_text, english_text, _now()),
+            )
+
     def _category(self, connection: Any, name_source: str, merchant_source: str | None, classifier: CategoryClassifier) -> tuple[str, str, str, float]:
-        override = self._execute(connection, "SELECT category_wide, category_narrow FROM silver_category_overrides WHERE name_normalized = ?", (_norm(name_source),)).fetchone()
+        override = self._execute(connection, "SELECT category_wide, category_narrow FROM meta_category_overrides WHERE name_normalized = ?", (_norm(name_source),)).fetchone()
         if override:
             return str(override["category_wide"]), str(override["category_narrow"]), "manual", 1.0
         result = classifier.classify(_name_without_code(name_source), merchant_source)
@@ -358,18 +479,18 @@ class WarehouseRepository(ReceiptRepository):
         if row:
             self._execute(
                 connection,
-                """UPDATE silver_products SET name_en = COALESCE(?, name_en), category_wide = ?,
+                """UPDATE silver_products SET name_en = COALESCE(?, name_en), merchant_name = ?, category_wide = ?,
                    category_narrow = ?, category_source = ?, category_confidence = ?, updated_at = ? WHERE id = ?""",
-                (name_en, category[0], category[1], category[2], category[3], _now(), row["id"]),
+                (name_en, merchant_source, category[0], category[1], category[2], category[3], _now(), row["id"]),
             )
             return int(row["id"]), category
         product_id = self._insert_id(
             connection,
             """INSERT INTO silver_products
-               (merchant_id, name_source, name_en, name_normalized, category_wide, category_narrow,
+               (merchant_id, merchant_name, name_source, name_en, name_normalized, category_wide, category_narrow,
                 category_source, category_confidence, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (merchant_id, name_source, name_en, normalized, category[0], category[1], category[2], category[3], _now()),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (merchant_id, merchant_source, name_source, name_en, normalized, category[0], category[1], category[2], category[3], _now()),
         )
         return product_id, category
 
@@ -419,11 +540,13 @@ class WarehouseRepository(ReceiptRepository):
                     self._insert_id(
                         connection,
                         """INSERT INTO silver_receipt_items
-                           (silver_receipt_id, bronze_slipapp_item_id, position, product_id, product_name,
+                           (silver_receipt_id, bronze_slipapp_item_id, position, merchant_id, merchant_name,
+                            product_id, product_name,
                             quantity, unit, unit_price, line_total, producer, category_wide, category_narrow,
                             category_source, category_confidence)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (silver_id, item["id"], item["position"], product_id, name_en, item["quantity"], item["unit"],
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (silver_id, item["id"], item["position"], merchant_id, merchant_en,
+                         product_id, name_en, item["quantity"], item["unit"],
                          item["unit_price"], item["line_total"], item["producer_source"], category[0], category[1], category[2], category[3]),
                     )
                 count += 1
@@ -453,19 +576,28 @@ class WarehouseRepository(ReceiptRepository):
             merchant_en = translator.translate(row["merchant_name_source"]) if row["merchant_name_source"] else None
             merchant_id = self._merchant_id(connection, row["merchant_name_source"], merchant_en)
             category = self._category(connection, row["product_name_source"], row["merchant_name_source"], classifier)
+            product_name = translator.translate(row["product_name_source"])
+            product_id, _ = self._product_id(
+                connection,
+                merchant_id,
+                row["merchant_name_source"],
+                row["product_name_source"],
+                product_name,
+                classifier,
+            )
             existing = self._execute(connection, "SELECT id FROM silver_input_entries WHERE bronze_input_id = ?", (bronze_input_id,)).fetchone()
-            params = (merchant_id, merchant_en, translator.translate(row["product_name_source"]), row["quantity"], row["unit"], category[0], category[1], category[2], category[3])
+            params = (merchant_id, product_id, merchant_en, product_name, row["quantity"], row["unit"], category[0], category[1], category[2], category[3])
             if existing:
-                self._execute(connection, """UPDATE silver_input_entries SET merchant_id = ?, merchant_name = ?, product_name = ?,
+                self._execute(connection, """UPDATE silver_input_entries SET merchant_id = ?, product_id = ?, merchant_name = ?, product_name = ?,
                     quantity = ?, unit = ?, category_wide = ?, category_narrow = ?, category_source = ?, category_confidence = ?
                     WHERE id = ?""", (*params, existing["id"]))
                 return int(existing["id"])
             return self._insert_id(
                 connection,
                 """INSERT INTO silver_input_entries
-                   (bronze_input_id, merchant_id, merchant_name, product_name, quantity, unit,
+                   (bronze_input_id, merchant_id, product_id, merchant_name, product_name, quantity, unit,
                     category_wide, category_narrow, category_source, category_confidence, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (bronze_input_id, *params, _now()),
             )
 
@@ -481,7 +613,7 @@ class WarehouseRepository(ReceiptRepository):
 
     def save_category_override(self, name_source: str, wide: str, narrow: str) -> None:
         with self._connection() as connection:
-            self._execute(connection, """INSERT INTO silver_category_overrides (name_normalized, category_wide, category_narrow, updated_at)
+            self._execute(connection, """INSERT INTO meta_category_overrides (name_normalized, category_wide, category_narrow, updated_at)
                 VALUES (?, ?, ?, ?) ON CONFLICT(name_normalized) DO UPDATE SET category_wide = excluded.category_wide,
                 category_narrow = excluded.category_narrow, updated_at = excluded.updated_at""", (_norm(name_source), wide, narrow, _now()))
 

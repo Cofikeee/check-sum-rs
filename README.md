@@ -8,9 +8,11 @@ categories.
 ## What it does
 
 - Accepts SlipApp `.db`/`.sqlite` backups from one configured Telegram user and imports only new fiscal receipts.
-- Keeps the backup under `data/imports/` and stores raw values in explicitly named `bronze_slipapp_*` tables.
-- Accepts `/add` manual text; those messages go to `bronze_input_entries`, never into SlipApp tables.
-- Builds `silver_receipts`, `silver_receipt_items`, `silver_input_entries`, `silver_merchants`, and `silver_products` from bronze.
+- Keeps the backup under `data/imports/` and stores raw values in the PostgreSQL `bronze` schema (`slipapp_*` and `input_entries`).
+- Accepts `/add` manual text; those messages go to `bronze.input_entries`, never into SlipApp tables.
+- Builds the PostgreSQL `silver` schema (`slipapp_receipts`, `slipapp_items`, `input_entries`, `merchants`, and `products`) from bronze.
+- Keeps the shop directly on each silver product/item row (`merchant_id` and `merchant_name`).
+- Stores translation/category overrides and the warehouse schema version in the `meta` schema.
 - Translates Serbian locally in silver, keeps original values in bronze, and denormalizes merchant/product fields for simple queries.
 - Classifies products into English wide/narrow categories. Heuristics run by default; an optional OpenAI classifier can be enabled with `CATEGORY_OPENAI_API_KEY`.
 - Reuses translation and category overrides and retains the original source payloads.
@@ -34,7 +36,8 @@ so a normal container crash/restart does not lose records. Do not run
 
 To inspect the database in DataGrip, add a PostgreSQL data source with host
 `127.0.0.1`, port `5432`, database `receipts`, user `receiptbot`, and the
-password from `.env`.
+password from `.env`. Select the `bronze`, `silver`, and `meta` schemas in the
+database tree; there is no application data in `public`.
 
 ## Telegram workflow
 
@@ -51,9 +54,9 @@ fallback also accepts forms such as `shop: Lidl, milk 2 l`.
 ## Import a SlipApp backup
 
 You can send a SlipApp `.db` backup to the bot as a Telegram file. It is stored
-under `data/imports/`; raw rows land in `bronze_slipapp_receipts` and
-`bronze_slipapp_items`, while the derived English model is written to
-`silver_receipts` and `silver_receipt_items`. Sending the same backup again is
+under `data/imports/`; raw rows land in `bronze.slipapp_receipts` and
+`bronze.slipapp_items`, while the derived English model is written to
+`silver.slipapp_receipts` and `silver.slipapp_items`. Sending the same backup again is
 safe: its SHA-256 and every fiscal URL/PFR are deduplicated, while a new export
 adds only new bronze rows.
 
@@ -75,12 +78,14 @@ The default classifier is local and deterministic. It writes English `wide`
 and `narrow` labels plus confidence/source. To use an OpenAI model for unknown
 products, set `CATEGORY_OPENAI_API_KEY` and optionally
 `CATEGORY_OPENAI_MODEL`; this is opt-in and can incur API costs. Approved
-corrections can be written to `silver_category_overrides` and will be reused.
+corrections are stored in `meta.category_overrides` and will be reused.
 
 ## Data and backup
 
-The source-of-truth tables are `bronze_slipapp_*` and `bronze_input_entries`.
-Silver is derived and can be rebuilt. Back up both `data/` and the
+The source-of-truth tables are `bronze.slipapp_*` and `bronze.input_entries`.
+Silver is derived and can be rebuilt; `meta` contains application metadata.
+The old public `receipts`, `receipt_files`, `receipt_pages`, and QR/OCR tables
+are not created by the running bot. Back up both `data/` and the
 `postgres_data` volume with an encrypted local copy. Do not commit `.env` or
 `data/`.
 
