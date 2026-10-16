@@ -41,6 +41,6 @@ select
     current_timestamp as updated_at
 from canonical
 left join {{ ref('silver_merchants') }} as merchant
-    on merchant.name_normalized = lower({{ normalize_company_name('canonical.merchant_name_source') }})
+    on merchant.name_normalized = {{ normalize_company_name('canonical.merchant_name_source') }}
 left join {{ source('meta', 'translation_overrides') }} as payment_override
     on payment_override.source_normalized = lower(trim(canonical.payment_method))

@@ -18,7 +18,7 @@ with prepared as (
         product.category_confidence
     from {{ source('bronze', 'input_entries') }} as input_entry
     left join {{ ref('silver_merchants') }} as merchant
-        on merchant.name_normalized = lower({{ normalize_company_name('input_entry.merchant_name_source') }})
+        on merchant.name_normalized = {{ normalize_company_name('input_entry.merchant_name_source') }}
     left join {{ ref('silver_products') }} as product
         on product.product_key = md5(
             coalesce(merchant.name_en, '') || '|' || {{ trim_product_metadata(natural_product_source('input_entry.product_name_source')) }}

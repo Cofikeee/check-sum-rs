@@ -34,9 +34,9 @@ deduplicated as (
     from normalized
 )
 select
-    company_name as name_source,
-    company_name as name_en,
-    lower(company_name) as name_normalized,
+    name_source,
+    name_source as name_en,
+    company_name as name_normalized,
     current_timestamp as updated_at
 from deduplicated
 where row_number = 1 and nullif(company_name, '') is not null

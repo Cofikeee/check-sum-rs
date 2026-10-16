@@ -14,7 +14,7 @@ categories.
 - Keeps the shop directly on each silver product/item row (`merchant_id` and `merchant_name`).
 - Stores translation/category overrides and the warehouse schema version in the `meta` schema.
 - Translates Serbian product/payment text locally in silver, keeps original values in bronze, and denormalizes merchant/product fields for simple queries.
-- Keeps merchant names in their printed language (no translation), trimming legal suffixes and location/country tokens such as `D.O.O.`, `DOO`, `BEOGRAD`, `NOVI SAD`, `RS`, `NS`, `SERBIA`, and `SRBIJA`, then normalizing to uppercase.
+- Keeps merchant names in their printed language (no translation): `name_source` remains the source value, while `name_normalized` trims legal suffixes and location/country tokens such as `D.O.O.`, `DOO`, `D O O`, `ДОО`, `Д О О`, `BEOGRAD`, `NOVI SAD`, `RS`, `NS`, `SERBIA`, and `SRBIJA`, then normalizes to uppercase.
 - Classifies products into English wide/narrow categories. Heuristics run by default; an optional OpenAI classifier can be enabled with `CATEGORY_OPENAI_API_KEY`.
 - Reuses translation and category overrides and retains the original source payloads.
 

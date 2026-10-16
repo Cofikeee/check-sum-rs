@@ -36,7 +36,7 @@ trim(
             regexp_replace(
                 regexp_replace(
                     upper(coalesce({{ expression }}, '')),
-                '[[:<:]](D[.]?[[:space:]]*O[.]?[[:space:]]*O[.]?|NOVI[[:space:]]+SAD|BEOGRAD|SERBIA|SRBIJA|RS|NS)[[:>:]]',
+                '[[:<:]](D[.]?[[:space:]]*O[.]?[[:space:]]*O[.]?|Д[.]?[[:space:]]*О[.]?[[:space:]]*О[.]?|NOVI[[:space:]]+SAD|BEOGRAD|SERBIA|SRBIJA|RS|NS)[[:>:]]',
                 ' ', 'gi'
             ),
             '[,.;:/()_-]+', ' ', 'g'

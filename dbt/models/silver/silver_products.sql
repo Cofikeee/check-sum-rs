@@ -27,7 +27,7 @@ manual_items as (
         null::bigint as bronze_item_id
     from {{ source('bronze', 'input_entries') }} as input_entry
     left join {{ ref('silver_merchants') }} as merchant
-        on merchant.name_normalized = lower({{ normalize_company_name('input_entry.merchant_name_source') }})
+        on merchant.name_normalized = {{ normalize_company_name('input_entry.merchant_name_source') }}
     
 ),
 all_items as (
