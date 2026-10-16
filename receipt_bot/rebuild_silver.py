@@ -5,6 +5,7 @@ import json
 
 from .category import classifier_from_environment
 from .config import Settings
+from .dbt_runner import DbtRunner
 from .translation import CachedTranslator, LocalMarianTranslator
 from .warehouse import WarehouseRepository
 
@@ -16,6 +17,11 @@ def main() -> None:
     settings.ensure_directories()
     repository = WarehouseRepository(settings.database_url)
     repository.initialise()
+    dbt_runner = DbtRunner()
+    if dbt_runner.available:
+        dbt_runner.build()
+        print(json.dumps({"dbt": "built", "counts": repository.layer_counts()}, ensure_ascii=False, indent=2))
+        return
     translator = CachedTranslator(repository, LocalMarianTranslator(settings.translation_model))
     classifier = classifier_from_environment()
     rebuilt = sum(

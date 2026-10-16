@@ -13,7 +13,8 @@ categories.
 - Builds the PostgreSQL `silver` schema (`slipapp_receipts`, `slipapp_items`, `input_entries`, `merchants`, and `products`) from bronze.
 - Keeps the shop directly on each silver product/item row (`merchant_id` and `merchant_name`).
 - Stores translation/category overrides and the warehouse schema version in the `meta` schema.
-- Translates Serbian locally in silver, keeps original values in bronze, and denormalizes merchant/product fields for simple queries.
+- Translates Serbian product/payment text locally in silver, keeps original values in bronze, and denormalizes merchant/product fields for simple queries.
+- Keeps merchant names in their printed language (no translation), trimming legal suffixes and location/country tokens such as `D.O.O.`, `DOO`, `BEOGRAD`, `NOVI SAD`, `RS`, `NS`, `SERBIA`, and `SRBIJA`, then normalizing to uppercase.
 - Classifies products into English wide/narrow categories. Heuristics run by default; an optional OpenAI classifier can be enabled with `CATEGORY_OPENAI_API_KEY`.
 - Reuses translation and category overrides and retains the original source payloads.
 
@@ -71,6 +72,18 @@ The command defaults ownership to `ALLOWED_TELEGRAM_USER_ID`; use
 `--owner-chat-id` for another private chat. Bronze is committed before silver,
 so a translation/category failure never destroys the raw import and a rerun can
 rebuild silver.
+
+## dbt transformations
+
+The silver layer is materialized by the dbt project in `dbt/`. Models use
+idempotent incremental merges. Receipt rows are canonicalized by QR URL (with
+the fiscal receipt number as a fallback), and product names are uppercased after
+removing printed metadata such as numeric codes, `/KOM`, and `[KOM]`. Rebuild
+the layer manually with:
+
+```bash
+docker compose exec receipt-bot dbt build --project-dir /app/dbt --profiles-dir /app/dbt --target docker
+```
 
 ## Categories and AI
 

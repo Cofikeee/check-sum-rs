@@ -22,6 +22,7 @@ from .models import ParsedReceipt, ReceiptItemDraft
 from .translation import Translator
 from .warehouse import WarehouseRepository
 from .category import CategoryClassifier, classifier_from_environment
+from .dbt_runner import DbtRunner
 
 
 class SlipAppFormatError(ValueError):
@@ -218,11 +219,13 @@ class SlipAppImporter:
         translator: Translator,
         confidence_threshold: float = 0.90,
         classifier: CategoryClassifier | None = None,
+        dbt_runner: DbtRunner | None = None,
     ) -> None:
         self.repository = repository
         self.translator = translator
         self.confidence_threshold = confidence_threshold
         self.classifier = classifier or classifier_from_environment()
+        self.dbt_runner = dbt_runner
         self._translation_error: str | None = None
 
     def _translate(self, value: str | None) -> str | None:
@@ -320,6 +323,8 @@ class SlipAppImporter:
             )
             receipt_ids, created = self.repository.store_bronze_slipapp_records(import_id, records)
             self.repository.build_silver_slipapp(import_id, self.translator, self.classifier)
+            if self.dbt_runner is not None:
+                self.dbt_runner.build()
             return SlipAppImportResult(
                 import_id=import_id,
                 receipt_ids=tuple(receipt_ids),

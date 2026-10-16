@@ -6,4 +6,5 @@ __pycache__
 **/__pycache__
 *.py[cod]
 data
+dbt/target
 models

@@ -4,4 +4,7 @@ __pycache__/
 .pytest_cache/
 *.py[cod]
 data/
-models/
+/models/
+dbt/target/
+dbt/logs/
+dbt/.user.yml

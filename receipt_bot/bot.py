@@ -18,6 +18,7 @@ from telegram.ext import (
 
 from .config import Settings
 from .category import CategoryClassifier, classifier_from_environment
+from .dbt_runner import DbtRunner
 from .input_parser import InputParseError, parse_input
 from .slipapp import SlipAppImporter
 from .storage import LocalStorage
@@ -37,8 +38,9 @@ class TelegramReceiptBot:
         )
         self.translator = translator
         self.category_classifier: CategoryClassifier = classifier_from_environment()
+        self.dbt_runner = DbtRunner()
         self.slipapp_importer = SlipAppImporter(
-            self.repository, translator, settings.confidence_threshold, self.category_classifier
+            self.repository, translator, settings.confidence_threshold, self.category_classifier, self.dbt_runner
         )
         self.application: Application | None = None
 
@@ -230,6 +232,7 @@ class TelegramReceiptBot:
             await asyncio.to_thread(
                 self.repository.build_silver_input, bronze_id, self.translator, self.category_classifier
             )
+            await asyncio.to_thread(self.dbt_runner.build)
         except (InputParseError, ValueError) as error:
             await update.effective_message.reply_text(f"Could not structure that input: {error}")
             return

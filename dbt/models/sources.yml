@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: bronze
+    schema: bronze
+    tables:
+      - name: slipapp_imports
+      - name: slipapp_receipts
+      - name: slipapp_import_rows
+      - name: slipapp_items
+      - name: input_entries
+  - name: meta
+    schema: meta
+    tables:
+      - name: translation_overrides
+      - name: category_overrides

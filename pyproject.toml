@@ -22,6 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "pytest-asyncio>=0.24"]
+dbt = ["dbt-postgres>=1.8,<2"]
 # The Docker image deliberately installs the CPU-only Torch wheel from PyTorch's
 # CPU index. Keeping it out of the generic dependency set avoids accidental
 # multi-gigabyte CUDA downloads on a CPU-only home server.

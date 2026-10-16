@@ -47,9 +47,19 @@ def test_bronze_source_tables_and_silver_derivation(tmp_path: Path) -> None:
         1,
     )
     repository.build_silver_input(bronze_id, IdentityTranslator(), HeuristicCategoryClassifier())
+    normalized_merchant_input = repository.add_bronze_input(
+        "MAXI D.O.O. BEOGRAD RS | Milk | l | 1",
+        "MAXI D.O.O. BEOGRAD RS",
+        "Milk",
+        "l",
+        Decimal("1"),
+        123,
+        2,
+    )
+    repository.build_silver_input(normalized_merchant_input, IdentityTranslator(), HeuristicCategoryClassifier())
     counts = repository.layer_counts()
     assert result.records == counts["bronze_slipapp_receipts"] == counts["silver_receipts"]
-    assert counts["bronze_input_entries"] == counts["silver_input_entries"] == 1
+    assert counts["bronze_input_entries"] == counts["silver_input_entries"] == 2
     with repository._connection() as connection:  # noqa: SLF001 - schema provenance assertion
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "bronze_slipapp_receipts" in tables
@@ -62,3 +72,7 @@ def test_bronze_source_tables_and_silver_derivation(tmp_path: Path) -> None:
             "SELECT merchant_name FROM silver_products WHERE name_source = 'Млеко/KOM/12345'"
         ).fetchone()
         assert product[0] == "ТЕСТ ПРОДАВНИЦА"
+        merchant = connection.execute(
+            "SELECT name_source, name_en FROM silver_merchants WHERE name_normalized = 'maxi'"
+        ).fetchone()
+        assert tuple(merchant) == ("MAXI", "MAXI")

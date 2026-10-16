@@ -1,0 +1,39 @@
+version: 2
+
+models:
+  - name: silver_merchants
+    columns:
+      - name: name_normalized
+        tests:
+          - not_null
+          - unique
+  - name: silver_slipapp_receipts
+    columns:
+      - name: receipt_key
+        tests:
+          - not_null
+          - unique
+      - name: bronze_slipapp_receipt_id
+        tests:
+          - not_null
+  - name: silver_products
+    columns:
+      - name: product_key
+        tests:
+          - not_null
+          - unique
+      - name: name_en
+        tests:
+          - not_null
+  - name: silver_slipapp_items
+    columns:
+      - name: bronze_slipapp_item_id
+        tests:
+          - not_null
+          - unique
+  - name: silver_input_entries
+    columns:
+      - name: bronze_input_id
+        tests:
+          - not_null
+          - unique

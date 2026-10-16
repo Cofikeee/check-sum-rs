@@ -33,6 +33,21 @@ def _name_without_code(value: str) -> str:
     return match.group(1).strip() if match else value.strip()
 
 
+def _merchant_display(value: str | None) -> str | None:
+    """Return the canonical, non-translated company label used in silver."""
+    if not value:
+        return None
+    cleaned = re.sub(
+        r"D\s*\.?\s*O\s*\.?\s*O\s*\.?|NOVI\s+SAD|BEOGRAD|SERBIA|SRBIJA|\bRS\b|\bNS\b",
+        " ",
+        value,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"[,.;:/()_-]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned.upper() or None
+
+
 WAREHOUSE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS bronze_slipapp_imports (
     id INTEGER PRIMARY KEY,
@@ -426,15 +441,22 @@ class WarehouseRepository(ReceiptRepository):
     def _merchant_id(self, connection: Any, name_source: str | None, name_en: str | None) -> int | None:
         if not name_source:
             return None
-        normalized = _norm(name_source)
+        display = _merchant_display(name_source)
+        if not display:
+            return None
+        normalized = _norm(display)
         row = self._execute(connection, "SELECT id FROM silver_merchants WHERE name_normalized = ?", (normalized,)).fetchone()
         if row:
-            self._execute(connection, "UPDATE silver_merchants SET name_en = COALESCE(?, name_en), updated_at = ? WHERE id = ?", (name_en, _now(), row["id"]))
+            self._execute(
+                connection,
+                "UPDATE silver_merchants SET name_source = ?, name_en = ?, updated_at = ? WHERE id = ?",
+                (display, display, _now(), row["id"]),
+            )
             return int(row["id"])
         return self._insert_id(
             connection,
             "INSERT INTO silver_merchants (name_source, name_en, name_normalized, updated_at) VALUES (?, ?, ?, ?)",
-            (name_source, name_en, normalized, _now()),
+            (display, display, normalized, _now()),
         )
 
     def get_translation_override(self, source_text: str) -> str | None:
@@ -506,7 +528,7 @@ class WarehouseRepository(ReceiptRepository):
                 (import_id,),
             ).fetchall()
             for row in rows:
-                merchant_en = translator.translate(row["merchant_name_source"]) if row["merchant_name_source"] else None
+                merchant_en = _merchant_display(row["merchant_name_source"])
                 merchant_id = self._merchant_id(connection, row["merchant_name_source"], merchant_en)
                 existing = self._execute(connection, "SELECT id FROM silver_receipts WHERE bronze_slipapp_receipt_id = ?", (row["id"],)).fetchone()
                 if existing:
@@ -573,7 +595,7 @@ class WarehouseRepository(ReceiptRepository):
             row = self._execute(connection, "SELECT * FROM bronze_input_entries WHERE id = ?", (bronze_input_id,)).fetchone()
             if row is None:
                 raise KeyError(f"bronze_input_entries {bronze_input_id} does not exist")
-            merchant_en = translator.translate(row["merchant_name_source"]) if row["merchant_name_source"] else None
+            merchant_en = _merchant_display(row["merchant_name_source"])
             merchant_id = self._merchant_id(connection, row["merchant_name_source"], merchant_en)
             category = self._category(connection, row["product_name_source"], row["merchant_name_source"], classifier)
             product_name = translator.translate(row["product_name_source"])

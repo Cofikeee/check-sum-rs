@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .config import Settings
+from .dbt_runner import DbtRunner
 from .slipapp import SlipAppImporter
 from .translation import CachedTranslator, LocalMarianTranslator
 from .warehouse import WarehouseRepository
@@ -29,6 +30,7 @@ def main() -> None:
         repository,
         translator,
         settings.confidence_threshold,
+        dbt_runner=DbtRunner(),
     ).import_file(
         args.backup,
         args.owner_chat_id if args.owner_chat_id is not None else settings.allowed_telegram_user_id,
