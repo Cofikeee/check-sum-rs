@@ -1,6 +1,6 @@
 {{ config(
     alias='merchants',
-    unique_key='name_normalized',
+    unique_key='id',
     pre_hook=[
         "alter table if exists silver.merchants drop column if exists name_en",
         "delete from silver.input_entries",
@@ -35,6 +35,7 @@ deduplicated as (
     from normalized
 )
 select
+    {{ sha256_hex('company_name') }} as id,
     name_source,
     company_name as name_normalized,
     current_timestamp as updated_at

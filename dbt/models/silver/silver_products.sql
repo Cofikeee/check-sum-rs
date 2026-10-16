@@ -1,6 +1,6 @@
 {{ config(
     alias='products',
-    unique_key='product_key'
+    unique_key='id'
 ) }}
 
 with receipt_items as (
@@ -50,7 +50,8 @@ deduplicated as (
     from translated
 )
 select
-    md5(coalesce(merchant_name, '') || '|' || clean_name_source) as product_key,
+    {{ sha256_hex("coalesce(merchant_id, '') || '|' || clean_name_source") }} as id,
+    {{ sha256_hex("coalesce(merchant_id, '') || '|' || clean_name_source") }} as product_key,
     merchant_id,
     merchant_name,
     clean_name_source as name_source,

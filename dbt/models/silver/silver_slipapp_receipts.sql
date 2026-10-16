@@ -1,6 +1,6 @@
 {{ config(
     alias='slipapp_receipts',
-    unique_key='bronze_slipapp_receipt_id'
+    unique_key='id'
 ) }}
 
 with ranked as (
@@ -25,7 +25,8 @@ canonical as (
     select * from ranked where row_number = 1
 )
 select
-    md5(dedupe_key) as receipt_key,
+    {{ sha256_hex('dedupe_key') }} as id,
+    {{ sha256_hex('dedupe_key') }} as receipt_key,
     canonical.id as bronze_slipapp_receipt_id,
     merchant.id as merchant_id,
     merchant.name_source as merchant_name,

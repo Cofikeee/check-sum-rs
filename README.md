@@ -11,6 +11,7 @@ categories.
 - Keeps the backup under `data/imports/` and stores raw values in the PostgreSQL `bronze` schema (`slipapp_*` and `input_entries`).
 - Accepts `/add` manual text; those messages go to `bronze.input_entries`, never into SlipApp tables.
 - Builds the PostgreSQL `silver` schema (`slipapp_receipts`, `slipapp_items`, `input_entries`, `merchants`, and `products`) from bronze.
+- Uses collision-resistant SHA-256 natural keys in silver: merchant IDs hash the normalized merchant name, receipt IDs hash the QR receipt URL (with a documented fallback only when no URL exists), and product/item/input IDs hash stable natural keys. Silver IDs are 64-character lowercase hexadecimal strings; no silver sequences are used.
 - Keeps the shop directly on each silver product/item row (`merchant_id` and `merchant_name`).
 - Stores translation/category overrides and the warehouse schema version in the `meta` schema.
 - Translates Serbian product/payment text locally in silver, keeps original values in bronze, and denormalizes merchant/product fields for simple queries.

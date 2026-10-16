@@ -9,6 +9,10 @@ upper(
 )
 {%- endmacro %}
 
+{% macro sha256_hex(expression) -%}
+encode(digest(convert_to(coalesce({{ expression }}, ''), 'UTF8'), 'sha256'), 'hex')
+{%- endmacro %}
+
 {% macro trim_product_metadata(expression) -%}
 upper(
     trim(

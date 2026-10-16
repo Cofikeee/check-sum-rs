@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from pathlib import Path
 import re
 from typing import Any
@@ -24,6 +25,16 @@ from .slipapp import SlipAppImporter
 from .storage import LocalStorage
 from .translation import CachedTranslator, LocalMarianTranslator
 from .warehouse import WarehouseRepository
+
+
+def _merchant_callback_token(merchant_id: str) -> str:
+    """Encode a SHA-256 merchant id within Telegram's 64-byte callback limit."""
+    return base64.urlsafe_b64encode(bytes.fromhex(merchant_id)).decode().rstrip("=")
+
+
+def _merchant_id_from_callback(token: str) -> str:
+    padding = "=" * (-len(token) % 4)
+    return base64.urlsafe_b64decode(token + padding).hex()
 
 
 class TelegramReceiptBot:
@@ -122,7 +133,7 @@ class TelegramReceiptBot:
             )
             return
         buttons = [
-            [InlineKeyboardButton(str(choice["name_source"]), callback_data=f"input:merchant:{choice['id']}")]
+            [InlineKeyboardButton(str(choice["name_source"]), callback_data=f"input:merchant:{_merchant_callback_token(str(choice['id']))}")]
             for choice in choices[:30]
         ]
         buttons.append([InlineKeyboardButton("New shop / free text", callback_data="input:merchant:new")])
@@ -138,7 +149,7 @@ class TelegramReceiptBot:
         assert update.callback_query and update.effective_message
         query = update.callback_query
         await query.answer()
-        merchant_match = re.fullmatch(r"input:merchant:(\d+|new)", query.data or "")
+        merchant_match = re.fullmatch(r"input:merchant:([A-Za-z0-9_-]+|new)", query.data or "")
         if merchant_match is not None:
             merchant_id = merchant_match.group(1)
             if merchant_id == "new":
@@ -150,7 +161,8 @@ class TelegramReceiptBot:
                     "Example: New Shop | Apples | kg | 1.5"
                 )
                 return
-            merchant_name = self.repository.merchant_name(int(merchant_id)) if isinstance(self.repository, WarehouseRepository) else None
+            merchant_hash = _merchant_id_from_callback(merchant_id)
+            merchant_name = self.repository.merchant_name(merchant_hash) if isinstance(self.repository, WarehouseRepository) else None
             context.user_data["input_merchant"] = merchant_name
             context.user_data["input_state"] = "awaiting_unit"
             buttons = [

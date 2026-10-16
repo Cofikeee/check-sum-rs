@@ -1,6 +1,6 @@
 {{ config(
     alias='slipapp_items',
-    unique_key='bronze_slipapp_item_id'
+    unique_key='id'
 ) }}
 
 with canonical_items as (
@@ -34,12 +34,13 @@ with_product as (
         product.category_confidence
     from canonical_items
     left join {{ ref('silver_products') }} as product
-        on product.product_key = md5(
-            coalesce(canonical_items.merchant_name, '') || '|' || canonical_items.clean_name_source
-        )
+        on product.product_key = {{ sha256_hex(
+            "coalesce(canonical_items.merchant_id, '') || '|' || canonical_items.clean_name_source"
+        ) }}
 )
 select
-    md5(receipt_key || ':' || position::text) as item_key,
+    {{ sha256_hex("receipt_key || ':' || position::text") }} as id,
+    {{ sha256_hex("receipt_key || ':' || position::text") }} as item_key,
     silver_receipt_id,
     bronze_slipapp_item_id,
     position,

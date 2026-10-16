@@ -12,6 +12,9 @@ clean-targets:
   - target
   - dbt_packages
 
+on-run-start:
+  - "create extension if not exists pgcrypto"
+
 models:
   receipt_warehouse:
     silver:

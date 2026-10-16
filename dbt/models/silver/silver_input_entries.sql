@@ -1,6 +1,6 @@
 {{ config(
     alias='input_entries',
-    unique_key='bronze_input_id'
+    unique_key='id'
 ) }}
 
 with prepared as (
@@ -20,11 +20,19 @@ with prepared as (
     left join {{ ref('silver_merchants') }} as merchant
         on merchant.name_normalized = {{ normalize_company_name('input_entry.merchant_name_source') }}
     left join {{ ref('silver_products') }} as product
-        on product.product_key = md5(
-            coalesce(merchant.name_source, '') || '|' || {{ trim_product_metadata(natural_product_source('input_entry.product_name_source')) }}
+        on product.product_key = encode(
+            digest(
+                convert_to(
+                    coalesce(merchant.id, '') || '|' || {{ trim_product_metadata(natural_product_source('input_entry.product_name_source')) }},
+                    'UTF8'
+                ),
+                'sha256'
+            ),
+            'hex'
         )
 )
 select
+    {{ sha256_hex("'input:' || bronze_input_id::text") }} as id,
     bronze_input_id,
     merchant_id,
     product_id,
