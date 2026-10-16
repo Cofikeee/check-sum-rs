@@ -1,7 +1,10 @@
-select product_key, name_source
+select product_key, name_source, name_normalized
 from {{ ref('silver_products') }}
-where name_source ~ '^[[:space:]]*\[[0-9]+\]'
-   or name_source ~ '^[[:space:]]*[0-9]+[[:space:]]+'
-   or name_source ~* '[[:space:]]*/[[:space:]]*(KOM|КОМ|PCS|KG|КГ|G|Г|L|Л|SET|M)[.]?[[:space:]]*$'
-   or name_source ~* '[[:space:]]*\[(KOM|КОМ|PCS|KG|КГ|G|Г|L|Л|SET|M)\][.]?[[:space:]]*$'
-   or name_en ~ '>>[^<]+<<'
+where name_source is null
+   or name_normalized is null
+   or name_normalized <> upper(name_normalized)
+   or name_normalized ~ '>>[^<]+<<'
+   or name_normalized ~ '^[[:space:]]*\[[0-9]+\]'
+   or name_normalized ~ '^[[:space:]]*[0-9]+[[:space:]]+'
+   or name_normalized ~* '[[:space:]]*/[[:space:]]*(KOM|КОМ|PCS|KG|КГ|G|Г|L|Л|SET|M)[.]?[[:space:]]*$'
+   or name_normalized ~* '[[:space:]]*\[(KOM|КОМ|PCS|KG|КГ|G|Г|L|Л|SET|M)\][.]?[[:space:]]*$'

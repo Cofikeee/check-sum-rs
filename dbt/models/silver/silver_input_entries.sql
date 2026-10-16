@@ -1,6 +1,7 @@
 {{ config(
     alias='input_entries',
-    unique_key='id'
+    unique_key='id',
+    pre_hook="alter table if exists silver.input_entries drop column if exists product_name"
 ) }}
 
 with prepared as (
@@ -13,7 +14,8 @@ with prepared as (
         merchant.id as merchant_id,
         merchant.name_source as merchant_name,
         product.id as product_id,
-        {{ trim_product_metadata(natural_product_source('input_entry.product_name_source')) }} as product_name_source,
+        input_entry.product_name_source as product_name_source,
+        {{ natural_product_source('input_entry.product_name_source') }} as natural_product_name_source,
         input_entry.quantity,
         input_entry.unit,
         product.category_wide,
@@ -43,7 +45,7 @@ select
     merchant_id,
     product_id,
     merchant_name,
-    {{ trim_product_metadata('coalesce(override.english_text, product_name_source)') }} as product_name,
+    {{ trim_product_metadata('coalesce(override.english_text, natural_product_name_source)') }} as product_name_normalized,
     product_name_source,
     quantity,
     unit,
@@ -54,4 +56,4 @@ select
     current_timestamp as created_at
 from prepared
 left join {{ source('meta', 'translation_overrides') }} as override
-    on override.source_normalized = lower(trim(product_name_source))
+    on override.source_normalized = lower(trim(prepared.natural_product_name_source))

@@ -22,7 +22,10 @@ models:
         tests:
           - not_null
           - unique
-      - name: name_en
+      - name: name_source
+        tests:
+          - not_null
+      - name: name_normalized
         tests:
           - not_null
   - name: silver_slipapp_items
@@ -31,9 +34,21 @@ models:
         tests:
           - not_null
           - unique
+      - name: product_name_source
+        tests:
+          - not_null
+      - name: product_name_normalized
+        tests:
+          - not_null
   - name: silver_input_entries
     columns:
       - name: bronze_input_id
         tests:
           - not_null
           - unique
+      - name: product_name_source
+        tests:
+          - not_null
+      - name: product_name_normalized
+        tests:
+          - not_null

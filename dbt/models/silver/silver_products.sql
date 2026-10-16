@@ -1,6 +1,7 @@
 {{ config(
     alias='products',
-    unique_key='id'
+    unique_key='id',
+    pre_hook="alter table if exists silver.products drop column if exists name_en"
 ) }}
 
 with receipt_items as (
@@ -54,9 +55,8 @@ select
     {{ sha256_hex("coalesce(merchant_id, '') || '|' || clean_name_source") }} as product_key,
     merchant_id,
     merchant_name,
-    clean_name_source as name_source,
-    {{ trim_product_metadata('coalesce(override.english_text, natural_name_source)') }} as name_en,
-    lower(trim(clean_name_source)) as name_normalized,
+    deduplicated.name_source as name_source,
+    {{ trim_product_metadata('coalesce(override.english_text, natural_name_source)') }} as name_normalized,
     {{ category_wide('clean_name_source', "coalesce(merchant_name, '')") }} as category_wide,
     {{ category_narrow('clean_name_source', "coalesce(merchant_name, '')") }} as category_narrow,
     'dbt_heuristic' as category_source,

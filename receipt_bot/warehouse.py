@@ -41,9 +41,24 @@ def _receipt_dedupe_key(qr_url: str | None, fiscal_receipt_number: str | None, s
     return f"ID:{source_id}"
 
 
-def _name_without_code(value: str) -> str:
+def _natural_product_source(value: str) -> str:
+    """Remove only a trailing two-part unit/code suffix before translation."""
     match = re.match(r"^(.*?)\s*/[^/]+/[^/]+\s*$", value)
-    return match.group(1).strip() if match else value.strip()
+    return match.group(1).strip() if match else value
+
+
+def _trim_product_metadata(value: str) -> str:
+    """Return the uppercase normalized product name used by silver."""
+    cleaned = re.sub(r">>[^<]+<<", "", value)
+    cleaned = re.sub(r"^\s*\[[0-9]+\]\s*", "", cleaned)
+    cleaned = re.sub(r"^\s*[0-9]+\s+", "", cleaned)
+    cleaned = re.sub(r"\s*/\s*(KOM|КОМ|PCS|KG|КГ|G|Г|L|Л|SET|M)\.?\s*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*\[(KOM|КОМ|PCS|KG|КГ|G|Г|L|Л|SET|M)\]\.?\s*$", "", cleaned, flags=re.IGNORECASE)
+    return " ".join(cleaned.upper().split())
+
+
+def _name_without_code(value: str) -> str:
+    return _trim_product_metadata(_natural_product_source(value))
 
 
 def _merchant_display(value: str | None) -> str | None:
@@ -149,14 +164,12 @@ CREATE TABLE IF NOT EXISTS silver_products (
     merchant_id TEXT REFERENCES silver_merchants(id) ON DELETE SET NULL,
     merchant_name TEXT,
     name_source TEXT NOT NULL,
-    name_en TEXT,
     name_normalized TEXT NOT NULL,
     category_wide TEXT NOT NULL DEFAULT 'other',
     category_narrow TEXT NOT NULL DEFAULT 'other',
     category_source TEXT NOT NULL DEFAULT 'heuristic',
     category_confidence REAL NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL,
-    UNIQUE(merchant_id, name_normalized)
+    updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS silver_receipts (
@@ -183,7 +196,8 @@ CREATE TABLE IF NOT EXISTS silver_receipt_items (
     merchant_id TEXT REFERENCES silver_merchants(id) ON DELETE SET NULL,
     merchant_name TEXT,
     product_id TEXT REFERENCES silver_products(id) ON DELETE SET NULL,
-    product_name TEXT,
+    product_name_source TEXT,
+    product_name_normalized TEXT,
     quantity TEXT,
     unit TEXT,
     unit_price TEXT,
@@ -202,7 +216,8 @@ CREATE TABLE IF NOT EXISTS silver_input_entries (
     merchant_id TEXT REFERENCES silver_merchants(id) ON DELETE SET NULL,
     product_id TEXT REFERENCES silver_products(id) ON DELETE SET NULL,
     merchant_name TEXT,
-    product_name TEXT,
+    product_name_source TEXT,
+    product_name_normalized TEXT,
     quantity TEXT,
     unit TEXT,
     category_wide TEXT NOT NULL DEFAULT 'other',
@@ -339,6 +354,14 @@ class WarehouseRepository(ReceiptRepository):
                         )
                     cursor.execute(schema)
                     cursor.execute("ALTER TABLE IF EXISTS silver.merchants DROP COLUMN IF EXISTS name_en")
+                    cursor.execute("ALTER TABLE IF EXISTS silver.products DROP COLUMN IF EXISTS name_en")
+                    cursor.execute("ALTER TABLE IF EXISTS silver.products DROP CONSTRAINT IF EXISTS products_merchant_id_name_normalized_key")
+                    cursor.execute("ALTER TABLE IF EXISTS silver.slipapp_items ADD COLUMN IF NOT EXISTS product_name_source TEXT")
+                    cursor.execute("ALTER TABLE IF EXISTS silver.slipapp_items ADD COLUMN IF NOT EXISTS product_name_normalized TEXT")
+                    cursor.execute("ALTER TABLE IF EXISTS silver.slipapp_items DROP COLUMN IF EXISTS product_name")
+                    cursor.execute("ALTER TABLE IF EXISTS silver.input_entries ADD COLUMN IF NOT EXISTS product_name_source TEXT")
+                    cursor.execute("ALTER TABLE IF EXISTS silver.input_entries ADD COLUMN IF NOT EXISTS product_name_normalized TEXT")
+                    cursor.execute("ALTER TABLE IF EXISTS silver.input_entries DROP COLUMN IF EXISTS product_name")
         else:
             with self._connection() as connection:
                 connection.executescript(schema)
@@ -518,31 +541,31 @@ class WarehouseRepository(ReceiptRepository):
 
     def _product_id(
         self, connection: Any, merchant_id: str | None, merchant_source: str | None,
-        name_source: str, name_en: str | None, classifier: CategoryClassifier,
+        name_source: str, name_normalized: str | None, classifier: CategoryClassifier,
     ) -> tuple[str, tuple[str, str, str, float]]:
         category = self._category(connection, name_source, merchant_source, classifier)
-        normalized = _norm(name_source)
+        clean_source = _trim_product_metadata(_natural_product_source(name_source))
+        product_id = _sha256(f"{merchant_id or ''}|{clean_source}")
         row = self._execute(
             connection,
-            "SELECT id FROM silver_products WHERE merchant_id IS NOT DISTINCT FROM ? AND name_normalized = ?",
-            (merchant_id, normalized),
+            "SELECT id FROM silver_products WHERE id = ?",
+            (product_id,),
         ).fetchone()
         if row:
             self._execute(
                 connection,
-                """UPDATE silver_products SET name_en = COALESCE(?, name_en), merchant_name = ?, category_wide = ?,
+                """UPDATE silver_products SET name_normalized = COALESCE(?, name_normalized), merchant_name = ?, category_wide = ?,
                    category_narrow = ?, category_source = ?, category_confidence = ?, updated_at = ? WHERE id = ?""",
-                (name_en, merchant_source, category[0], category[1], category[2], category[3], _now(), row["id"]),
+                (name_normalized, merchant_source, category[0], category[1], category[2], category[3], _now(), row["id"]),
             )
             return str(row["id"]), category
-        product_id = _sha256(f"{merchant_id or ''}|{normalized}")
         self._execute(
             connection,
             """INSERT INTO silver_products
-               (id, merchant_id, merchant_name, name_source, name_en, name_normalized, category_wide, category_narrow,
+               (id, merchant_id, merchant_name, name_source, name_normalized, category_wide, category_narrow,
                 category_source, category_confidence, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (product_id, merchant_id, merchant_source, name_source, name_en, normalized, category[0], category[1], category[2], category[3], _now()),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (product_id, merchant_id, merchant_source, name_source, name_normalized, category[0], category[1], category[2], category[3], _now()),
         )
         return product_id, category
 
@@ -587,22 +610,23 @@ class WarehouseRepository(ReceiptRepository):
                     silver_id = receipt_id
                 items = self._execute(connection, "SELECT * FROM bronze_slipapp_items WHERE bronze_receipt_id = ? ORDER BY position", (row["id"],)).fetchall()
                 for item in items:
-                    name_en = translator.translate(_name_without_code(item["name_source"]))
-                    suffix_match = re.search(r"(/[^/]+/[^/]+)\s*$", item["name_source"])
-                    if suffix_match:
-                        name_en += suffix_match.group(1)
-                    product_id, category = self._product_id(connection, merchant_id, row["merchant_name_source"], item["name_source"], name_en, classifier)
+                    name_normalized = _trim_product_metadata(
+                        translator.translate(_natural_product_source(item["name_source"]))
+                    )
+                    product_id, category = self._product_id(
+                        connection, merchant_id, row["merchant_name_source"], item["name_source"], name_normalized, classifier
+                    )
                     item_id = _sha256(f"{silver_id}:{item['position']}")
                     self._execute(
                         connection,
                         """INSERT INTO silver_receipt_items
                            (id, silver_receipt_id, bronze_slipapp_item_id, position, merchant_id, merchant_name,
-                            product_id, product_name,
+                            product_id, product_name_source, product_name_normalized,
                             quantity, unit, unit_price, line_total, producer, category_wide, category_narrow,
                             category_source, category_confidence)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (item_id, silver_id, item["id"], item["position"], merchant_id, merchant_source,
-                         product_id, name_en, item["quantity"], item["unit"],
+                         product_id, item["name_source"], name_normalized, item["quantity"], item["unit"],
                          item["unit_price"], item["line_total"], item["producer_source"], category[0], category[1], category[2], category[3]),
                     )
                 count += 1
@@ -632,13 +656,15 @@ class WarehouseRepository(ReceiptRepository):
             merchant_source = row["merchant_name_source"]
             merchant_id = self._merchant_id(connection, merchant_source)
             category = self._category(connection, row["product_name_source"], row["merchant_name_source"], classifier)
-            product_name = translator.translate(row["product_name_source"])
+            product_name_normalized = _trim_product_metadata(
+                translator.translate(_natural_product_source(row["product_name_source"]))
+            )
             product_id, _ = self._product_id(
                 connection,
                 merchant_id,
                 row["merchant_name_source"],
                 row["product_name_source"],
-                product_name,
+                product_name_normalized,
                 classifier,
             )
             existing = self._execute(connection, "SELECT id FROM silver_input_entries WHERE bronze_input_id = ?", (bronze_input_id,)).fetchone()
@@ -654,18 +680,18 @@ class WarehouseRepository(ReceiptRepository):
                     )
                 )
             silver_id = _sha256(f"input:{input_key}")
-            params = (merchant_id, product_id, merchant_source, product_name, row["quantity"], row["unit"], category[0], category[1], category[2], category[3])
+            params = (merchant_id, product_id, merchant_source, row["product_name_source"], product_name_normalized, row["quantity"], row["unit"], category[0], category[1], category[2], category[3])
             if existing:
-                self._execute(connection, """UPDATE silver_input_entries SET merchant_id = ?, product_id = ?, merchant_name = ?, product_name = ?,
+                self._execute(connection, """UPDATE silver_input_entries SET merchant_id = ?, product_id = ?, merchant_name = ?, product_name_source = ?, product_name_normalized = ?,
                     quantity = ?, unit = ?, category_wide = ?, category_narrow = ?, category_source = ?, category_confidence = ?
                     WHERE id = ?""", (*params, existing["id"]))
                 return str(existing["id"])
             self._execute(
                 connection,
                 """INSERT INTO silver_input_entries
-                   (id, bronze_input_id, merchant_id, product_id, merchant_name, product_name, quantity, unit,
+                   (id, bronze_input_id, merchant_id, product_id, merchant_name, product_name_source, product_name_normalized, quantity, unit,
                     category_wide, category_narrow, category_source, category_confidence, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (silver_id, bronze_input_id, *params, _now()),
             )
             return silver_id

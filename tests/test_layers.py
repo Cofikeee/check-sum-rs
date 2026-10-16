@@ -72,10 +72,20 @@ def test_bronze_source_tables_and_silver_derivation(tmp_path: Path) -> None:
             row[1] for row in connection.execute("PRAGMA table_info(silver_merchants)")
         }
         assert "name_en" not in merchant_columns
+        product_columns = {row[1] for row in connection.execute("PRAGMA table_info(silver_products)")}
+        assert {"name_source", "name_normalized"} <= product_columns
+        assert "name_en" not in product_columns
+        item_columns = {row[1] for row in connection.execute("PRAGMA table_info(silver_receipt_items)")}
+        assert {"product_name_source", "product_name_normalized"} <= item_columns
+        assert "product_name" not in item_columns
         product = connection.execute(
             "SELECT merchant_name FROM silver_products WHERE name_source = 'Млеко/KOM/12345'"
         ).fetchone()
         assert product[0] == "ТЕСТ ПРОДАВНИЦА"
+        product_names = connection.execute(
+            "SELECT name_source, name_normalized FROM silver_products WHERE name_source = 'Млеко/KOM/12345'"
+        ).fetchone()
+        assert tuple(product_names) == ("Млеко/KOM/12345", "МЛЕКО")
         merchant = connection.execute(
             "SELECT name_source FROM silver_merchants WHERE name_normalized = 'maxi'"
         ).fetchone()

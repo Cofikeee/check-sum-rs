@@ -1,6 +1,7 @@
 {{ config(
     alias='slipapp_items',
-    unique_key='id'
+    unique_key='id',
+    pre_hook="alter table if exists silver.slipapp_items drop column if exists product_name"
 ) }}
 
 with canonical_items as (
@@ -27,7 +28,7 @@ with_product as (
     select
         canonical_items.*,
         product.id as product_id,
-        product.name_en as product_name,
+        product.name_normalized as product_name_normalized,
         product.category_wide,
         product.category_narrow,
         product.category_source,
@@ -47,8 +48,8 @@ select
     merchant_id,
     merchant_name,
     product_id,
-    product_name,
-    clean_name_source as product_name_source,
+    product_name_normalized,
+    name_source as product_name_source,
     quantity,
     unit,
     unit_price,
