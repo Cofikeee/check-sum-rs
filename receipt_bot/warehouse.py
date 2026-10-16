@@ -642,7 +642,18 @@ class WarehouseRepository(ReceiptRepository):
                 classifier,
             )
             existing = self._execute(connection, "SELECT id FROM silver_input_entries WHERE bronze_input_id = ?", (bronze_input_id,)).fetchone()
-            silver_id = _sha256(f"input:{bronze_input_id}")
+            if row["source_chat_id"] is not None and row["source_message_id"] is not None:
+                input_key = f"{row['source_chat_id']}:{row['source_message_id']}"
+            else:
+                input_key = "|".join(
+                    (
+                        row["source_text"],
+                        row["merchant_name_source"] or "",
+                        row["product_name_source"],
+                        row["created_at"],
+                    )
+                )
+            silver_id = _sha256(f"input:{input_key}")
             params = (merchant_id, product_id, merchant_source, product_name, row["quantity"], row["unit"], category[0], category[1], category[2], category[3])
             if existing:
                 self._execute(connection, """UPDATE silver_input_entries SET merchant_id = ?, product_id = ?, merchant_name = ?, product_name = ?,

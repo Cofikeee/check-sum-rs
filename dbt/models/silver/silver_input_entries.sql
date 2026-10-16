@@ -6,6 +6,10 @@
 with prepared as (
     select
         input_entry.id as bronze_input_id,
+        input_entry.source_chat_id,
+        input_entry.source_message_id,
+        input_entry.source_text,
+        input_entry.created_at,
         merchant.id as merchant_id,
         merchant.name_source as merchant_name,
         product.id as product_id,
@@ -32,7 +36,9 @@ with prepared as (
         )
 )
 select
-    {{ sha256_hex("'input:' || bronze_input_id::text") }} as id,
+    {{ sha256_hex(
+        "'input:' || coalesce(prepared.source_chat_id::text || ':' || prepared.source_message_id::text, prepared.source_text || '|' || coalesce(prepared.merchant_name, '') || '|' || prepared.product_name_source || '|' || prepared.created_at::text)"
+    ) }} as id,
     bronze_input_id,
     merchant_id,
     product_id,
