@@ -24,7 +24,24 @@ services:
         condition: service_healthy
     volumes:
       - ./data:/app/data
+      # dbt source is mounted, not baked into the Telegram image.
+      - ./dbt:/app/dbt
     restart: unless-stopped
+
+  dbt:
+    build:
+      context: .
+      dockerfile: Dockerfile.dbt
+    env_file:
+      - ${RECEIPT_BOT_ENV_FILE:-.env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./dbt:/app/dbt
+    working_dir: /app/dbt
+    profiles: ["tools"]
+    command: ["build", "--project-dir", "/app/dbt", "--profiles-dir", "/app/dbt", "--target", "docker"]
 
 volumes:
   postgres_data:

@@ -2,6 +2,7 @@
     alias='merchants',
     unique_key='name_normalized',
     pre_hook=[
+        "alter table if exists silver.merchants drop column if exists name_en",
         "delete from silver.input_entries",
         "delete from silver.slipapp_items",
         "delete from silver.products",
@@ -35,7 +36,6 @@ deduplicated as (
 )
 select
     name_source,
-    name_source as name_en,
     company_name as name_normalized,
     current_timestamp as updated_at
 from deduplicated

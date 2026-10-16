@@ -14,7 +14,6 @@ RUN apt-get update \
 
 COPY pyproject.toml README.md ./
 COPY receipt_bot ./receipt_bot
-COPY dbt ./dbt
 COPY tests ./tests
 RUN pip install --upgrade pip \
     && pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1+cpu \

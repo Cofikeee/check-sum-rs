@@ -122,7 +122,7 @@ class TelegramReceiptBot:
             )
             return
         buttons = [
-            [InlineKeyboardButton(str(choice["name_en"] or choice["name_source"]), callback_data=f"input:merchant:{choice['id']}")]
+            [InlineKeyboardButton(str(choice["name_source"]), callback_data=f"input:merchant:{choice['id']}")]
             for choice in choices[:30]
         ]
         buttons.append([InlineKeyboardButton("New shop / free text", callback_data="input:merchant:new")])

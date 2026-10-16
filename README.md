@@ -30,6 +30,10 @@ categories.
 
 4. Open the bot chat and run `/start`.
 
+The Telegram image does not contain a baked-in copy of `dbt/`; the project is
+mounted at runtime. Editing SQL/macros therefore does not require rebuilding
+the Telegram image.
+
 The first import triggers a local translation-model download. Later runs reuse
 `data/models/`. PostgreSQL is stored in the named `postgres_data` Docker volume,
 so a normal container crash/restart does not lose records. Do not run
@@ -79,11 +83,15 @@ The silver layer is materialized by the dbt project in `dbt/`. Models use
 idempotent incremental merges. Receipt rows are canonicalized by QR URL (with
 the fiscal receipt number as a fallback), and product names are uppercased after
 removing printed metadata such as numeric codes, `/KOM`, and `[KOM]`. Rebuild
-the layer manually with:
+the layer manually with the dedicated dbt container:
 
 ```bash
-docker compose exec receipt-bot dbt build --project-dir /app/dbt --profiles-dir /app/dbt --target docker
+docker compose --profile tools run --rm dbt
 ```
+
+The bot still runs the mounted dbt project after an import when dbt is present
+in the Telegram image. The dedicated service is useful for model-only changes;
+it has no Telegram process.
 
 ## Categories and AI
 

@@ -38,7 +38,7 @@ def _merchant_display(value: str | None) -> str | None:
     if not value:
         return None
     cleaned = re.sub(
-        r"D\s*\.?\s*O\s*\.?\s*O\s*\.?|NOVI\s+SAD|BEOGRAD|SERBIA|SRBIJA|\bRS\b|\bNS\b",
+        r"D\s*\.?\s*O\s*\.?\s*O\s*\.?|Д\s*\.?\s*О\s*\.?\s*О\s*\.?|NOVI\s+SAD|BEOGRAD|SERBIA|SRBIJA|\bRS\b|\bNS\b",
         " ",
         value,
         flags=re.IGNORECASE,
@@ -127,7 +127,6 @@ CREATE TABLE IF NOT EXISTS bronze_input_entries (
 CREATE TABLE IF NOT EXISTS silver_merchants (
     id INTEGER PRIMARY KEY,
     name_source TEXT NOT NULL,
-    name_en TEXT,
     name_normalized TEXT NOT NULL UNIQUE,
     updated_at TEXT NOT NULL
 );
@@ -312,6 +311,7 @@ class WarehouseRepository(ReceiptRepository):
                     for table in LEGACY_PUBLIC_TABLES:
                         cursor.execute(f"DROP TABLE IF EXISTS public.{table} CASCADE")
                     cursor.execute(schema)
+                    cursor.execute("ALTER TABLE IF EXISTS silver.merchants DROP COLUMN IF EXISTS name_en")
         else:
             with self._connection() as connection:
                 connection.executescript(schema)
@@ -438,7 +438,7 @@ class WarehouseRepository(ReceiptRepository):
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def _merchant_id(self, connection: Any, name_source: str | None, name_en: str | None) -> int | None:
+    def _merchant_id(self, connection: Any, name_source: str | None) -> int | None:
         if not name_source:
             return None
         display = _merchant_display(name_source)
@@ -449,14 +449,14 @@ class WarehouseRepository(ReceiptRepository):
         if row:
             self._execute(
                 connection,
-                "UPDATE silver_merchants SET name_source = ?, name_en = ?, updated_at = ? WHERE id = ?",
-                (display, display, _now(), row["id"]),
+                "UPDATE silver_merchants SET name_source = ?, updated_at = ? WHERE id = ?",
+                (name_source, _now(), row["id"]),
             )
             return int(row["id"])
         return self._insert_id(
             connection,
-            "INSERT INTO silver_merchants (name_source, name_en, name_normalized, updated_at) VALUES (?, ?, ?, ?)",
-            (display, display, normalized, _now()),
+            "INSERT INTO silver_merchants (name_source, name_normalized, updated_at) VALUES (?, ?, ?)",
+            (name_source, normalized, _now()),
         )
 
     def get_translation_override(self, source_text: str) -> str | None:
@@ -528,8 +528,8 @@ class WarehouseRepository(ReceiptRepository):
                 (import_id,),
             ).fetchall()
             for row in rows:
-                merchant_en = _merchant_display(row["merchant_name_source"])
-                merchant_id = self._merchant_id(connection, row["merchant_name_source"], merchant_en)
+                merchant_source = row["merchant_name_source"]
+                merchant_id = self._merchant_id(connection, merchant_source)
                 existing = self._execute(connection, "SELECT id FROM silver_receipts WHERE bronze_slipapp_receipt_id = ?", (row["id"],)).fetchone()
                 if existing:
                     silver_id = int(existing["id"])
@@ -539,7 +539,7 @@ class WarehouseRepository(ReceiptRepository):
                         """UPDATE silver_receipts SET merchant_id = ?, merchant_name = ?, receipt_datetime = ?, currency = ?,
                            gross_total = ?, tax_total = ?, payment_method = ?, fiscal_receipt_number = ?, fiscal_esir = ?,
                            source_status = 'READY', updated_at = ? WHERE id = ?""",
-                        (merchant_id, merchant_en, row["receipt_datetime"], row["currency"], row["gross_total"], row["tax_total"],
+                        (merchant_id, merchant_source, row["receipt_datetime"], row["currency"], row["gross_total"], row["tax_total"],
                          row["payment_method"], row["fiscal_receipt_number"], row["fiscal_esir"], _now(), silver_id),
                     )
                 else:
@@ -549,7 +549,7 @@ class WarehouseRepository(ReceiptRepository):
                            (bronze_slipapp_receipt_id, merchant_id, merchant_name, receipt_datetime, currency,
                             gross_total, tax_total, payment_method, fiscal_receipt_number, fiscal_esir, updated_at)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (row["id"], merchant_id, merchant_en, row["receipt_datetime"], row["currency"], row["gross_total"],
+                        (row["id"], merchant_id, merchant_source, row["receipt_datetime"], row["currency"], row["gross_total"],
                          row["tax_total"], row["payment_method"], row["fiscal_receipt_number"], row["fiscal_esir"], _now()),
                     )
                 items = self._execute(connection, "SELECT * FROM bronze_slipapp_items WHERE bronze_receipt_id = ? ORDER BY position", (row["id"],)).fetchall()
@@ -567,7 +567,7 @@ class WarehouseRepository(ReceiptRepository):
                             quantity, unit, unit_price, line_total, producer, category_wide, category_narrow,
                             category_source, category_confidence)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (silver_id, item["id"], item["position"], merchant_id, merchant_en,
+                        (silver_id, item["id"], item["position"], merchant_id, merchant_source,
                          product_id, name_en, item["quantity"], item["unit"],
                          item["unit_price"], item["line_total"], item["producer_source"], category[0], category[1], category[2], category[3]),
                     )
@@ -595,8 +595,8 @@ class WarehouseRepository(ReceiptRepository):
             row = self._execute(connection, "SELECT * FROM bronze_input_entries WHERE id = ?", (bronze_input_id,)).fetchone()
             if row is None:
                 raise KeyError(f"bronze_input_entries {bronze_input_id} does not exist")
-            merchant_en = _merchant_display(row["merchant_name_source"])
-            merchant_id = self._merchant_id(connection, row["merchant_name_source"], merchant_en)
+            merchant_source = row["merchant_name_source"]
+            merchant_id = self._merchant_id(connection, merchant_source)
             category = self._category(connection, row["product_name_source"], row["merchant_name_source"], classifier)
             product_name = translator.translate(row["product_name_source"])
             product_id, _ = self._product_id(
@@ -608,7 +608,7 @@ class WarehouseRepository(ReceiptRepository):
                 classifier,
             )
             existing = self._execute(connection, "SELECT id FROM silver_input_entries WHERE bronze_input_id = ?", (bronze_input_id,)).fetchone()
-            params = (merchant_id, product_id, merchant_en, product_name, row["quantity"], row["unit"], category[0], category[1], category[2], category[3])
+            params = (merchant_id, product_id, merchant_source, product_name, row["quantity"], row["unit"], category[0], category[1], category[2], category[3])
             if existing:
                 self._execute(connection, """UPDATE silver_input_entries SET merchant_id = ?, product_id = ?, merchant_name = ?, product_name = ?,
                     quantity = ?, unit = ?, category_wide = ?, category_narrow = ?, category_source = ?, category_confidence = ?
@@ -625,7 +625,7 @@ class WarehouseRepository(ReceiptRepository):
 
     def merchant_choices(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._connection() as connection:
-            rows = self._execute(connection, "SELECT id, name_source, name_en FROM silver_merchants ORDER BY COALESCE(name_en, name_source) LIMIT ?", (limit,)).fetchall()
+            rows = self._execute(connection, "SELECT id, name_source FROM silver_merchants ORDER BY name_source LIMIT ?", (limit,)).fetchall()
             return [dict(row) for row in rows]
 
     def merchant_name(self, merchant_id: int) -> str | None:

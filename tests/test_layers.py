@@ -68,11 +68,15 @@ def test_bronze_source_tables_and_silver_derivation(tmp_path: Path) -> None:
     assert "meta_translation_overrides" in tables
     assert "receipt_files" not in tables
     with repository._connection() as connection:
+        merchant_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(silver_merchants)")
+        }
+        assert "name_en" not in merchant_columns
         product = connection.execute(
             "SELECT merchant_name FROM silver_products WHERE name_source = 'Млеко/KOM/12345'"
         ).fetchone()
         assert product[0] == "ТЕСТ ПРОДАВНИЦА"
         merchant = connection.execute(
-            "SELECT name_source, name_en FROM silver_merchants WHERE name_normalized = 'maxi'"
+            "SELECT name_source FROM silver_merchants WHERE name_normalized = 'maxi'"
         ).fetchone()
-        assert tuple(merchant) == ("MAXI", "MAXI")
+        assert tuple(merchant) == ("MAXI D.O.O. BEOGRAD RS",)

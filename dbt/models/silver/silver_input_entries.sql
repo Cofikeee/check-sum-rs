@@ -7,7 +7,7 @@ with prepared as (
     select
         input_entry.id as bronze_input_id,
         merchant.id as merchant_id,
-        merchant.name_en as merchant_name,
+        merchant.name_source as merchant_name,
         product.id as product_id,
         {{ trim_product_metadata(natural_product_source('input_entry.product_name_source')) }} as product_name_source,
         input_entry.quantity,
@@ -21,7 +21,7 @@ with prepared as (
         on merchant.name_normalized = {{ normalize_company_name('input_entry.merchant_name_source') }}
     left join {{ ref('silver_products') }} as product
         on product.product_key = md5(
-            coalesce(merchant.name_en, '') || '|' || {{ trim_product_metadata(natural_product_source('input_entry.product_name_source')) }}
+            coalesce(merchant.name_source, '') || '|' || {{ trim_product_metadata(natural_product_source('input_entry.product_name_source')) }}
         )
 )
 select
